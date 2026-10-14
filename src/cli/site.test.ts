@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
+import { headingSlugs } from './docs-testkit.js';
 
 // dist/cli -> dist -> repo root
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -10,7 +11,7 @@ const SITE = join(repoRoot, 'site');
 const PAGES_URL = 'https://mocraimer.github.io/agent-system/';
 const REPO_URL = 'https://github.com/mocraimer/agent-system';
 const RAW_URL = 'https://raw.githubusercontent.com/mocraimer/agent-system/main/';
-/** The only hosts the page may load a resource from: the three typefaces. */
+/** The only hosts outside the site that the page may load a resource from: they serve its three typefaces. */
 const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
 
 const read = (path: string): string => readFileSync(path, 'utf8');
@@ -72,24 +73,6 @@ function loadProblems(page: string): string[] {
   return problems;
 }
 
-/** GitHub's anchor for each heading of a Markdown file. */
-function headingSlugs(md: string): Set<string> {
-  const slugs = new Set<string>();
-  const seen = new Map<string, number>();
-  let inFence = false;
-  for (const line of md.split('\n')) {
-    if (/^\s*```/.test(line)) { inFence = !inFence; continue; }
-    const m = inFence ? null : /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
-    if (!m) continue;
-    const slug = m[1]!.toLowerCase().replace(/<[^>]+>/g, '').replace(/`/g, '')
-      .replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s/g, '-');
-    const n = seen.get(slug) ?? 0;
-    seen.set(slug, n + 1);
-    slugs.add(n === 0 ? slug : `${slug}-${n}`);
-  }
-  return slugs;
-}
-
 /** One problem per link into this repository whose file or heading does not exist. */
 function repoLinkProblems(text: string): string[] {
   const problems: string[] = [];
@@ -107,8 +90,9 @@ function repoLinkProblems(text: string): string[] {
   return problems;
 }
 
+/** Width and height from the IHDR chunk, or undefined when the bytes are not a PNG header. */
 const pngSize = (bytes: Buffer): { width: number; height: number } | undefined =>
-  bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
     ? { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }
     : undefined;
 
@@ -155,6 +139,7 @@ describe('the static-page checks catch drift', () => {
     header.writeUInt32BE(630, 20);
     assert.deepEqual(pngSize(header), { width: 1200, height: 630 });
     assert.equal(pngSize(Buffer.from('GIF89a')), undefined);
+    assert.equal(pngSize(header.subarray(0, 16)), undefined, 'a header cut short is not read past its end');
   });
 });
 
@@ -214,10 +199,17 @@ describe('the page says what the README says', () => {
     const page = html();
     const shown = [
       ...[...page.matchAll(/<span class="ln c">([\s\S]*?)<\/span>/g)].map((m) => decode(m[1]!)),
+      ...[...page.matchAll(/<code>((?:agentsys|node dist\/cli\/main\.js) [^<]*)<\/code>/g)].map((m) => decode(m[1]!)),
       ...[...page.matchAll(/<div class="how">([\s\S]*?)<\/div>/g)].flatMap((m) => [...m[1]!.matchAll(/<span>([^<]+)<\/span>/g)].map((s) => decode(s[1]!))),
     ].map((c) => c.replace(/\\\n\s*/g, ' ').replace(/\s+/g, ' ').trim());
     assert.ok(shown.length > 8, `expected the page to show its commands, found ${shown.length}`);
     assert.deepEqual(shown.filter((c) => !known.has(c)), [], 'on the page but not in the README or docs/AGENT-SETUP.md');
+  });
+
+  it('keeps no screenshot that docs/console-screens does not hold', () => {
+    const sources = new Set(readdirSync(join(repoRoot, 'docs', 'console-screens')));
+    const strays = readdirSync(join(SITE, 'assets')).filter((f) => !sources.has(f));
+    assert.deepEqual(strays, [], 'in site/assets but not in docs/console-screens');
   });
 
   it('shows the console screenshots byte for byte', () => {

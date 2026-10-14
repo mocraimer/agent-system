@@ -6,6 +6,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { promisify } from 'node:util';
+import {
+  CLI_PREFIX, commandLines, escapeRe, fencedBlocks, headingSlugs, proseOf, sectionOf, shellLines,
+} from './docs-testkit.js';
 
 const run = promisify(execFile);
 // dist/cli -> dist -> repo root
@@ -26,120 +29,7 @@ const TASKS_PATH = join(repoRoot, 'docs', 'READER-TASKS.md');
  * seeded drift, so a check that stopped catching anything would fail by itself.
  */
 
-// ---- Reading a document ---------------------------------------------------------
-
-const CLI_PREFIX = /^(?:agentsys|node dist\/cli\/main\.js)\s+/;
-
-/** The lines inside each fenced code block of a Markdown document. */
-function fencedBlocks(md: string): string[][] {
-  const blocks: string[][] = [];
-  let current: string[] | undefined;
-  for (const line of md.split('\n')) {
-    if (/^\s*```/.test(line)) {
-      if (current) { blocks.push(current); current = undefined; } else { current = []; }
-    } else if (current) {
-      current.push(line);
-    }
-  }
-  return blocks;
-}
-
-/** The document with its fenced code blocks and inline code spans removed. */
-function proseOf(md: string): string {
-  const kept: string[] = [];
-  let inFence = false;
-  for (const line of md.split('\n')) {
-    if (/^\s*```/.test(line)) { inFence = !inFence; continue; }
-    if (!inFence) kept.push(line.replace(/`[^`]*`/g, ''));
-  }
-  return kept.join('\n');
-}
-
-/** One logical line of a document: a fenced line, with backslash continuations joined, or a prose line. */
-interface Logical { text: string; fenced: boolean }
-
-function logicalLines(md: string): Logical[] {
-  const out: Logical[] = [];
-  const lines = md.split('\n');
-  const isFence = (l: string): boolean => /^\s*```/.test(l);
-  let inFence = false;
-  for (let i = 0; i < lines.length; i++) {
-    if (isFence(lines[i]!)) { inFence = !inFence; continue; }
-    if (!inFence) { out.push({ text: lines[i]!, fenced: false }); continue; }
-    let line = lines[i]!.trim();
-    while (line.endsWith('\\') && i + 1 < lines.length && !isFence(lines[i + 1]!)) {
-      line = `${line.slice(0, -1).trimEnd()} ${lines[++i]!.trim()}`;
-    }
-    out.push({ text: line.replace(/\s+#\s.*$/, '').trim(), fenced: true });
-  }
-  return out;
-}
-
-/**
- * Every `agentsys ...` or `node dist/cli/main.js ...` command in a document, in order: lines
- * in fenced blocks (continuations joined, trailing comments dropped) and, unless `fencedOnly`,
- * inline code spans in prose. A span that does not start with the program name, such as
- * `approve --task`, is not one. A fenced line is a whole command; an inline span may name only
- * part of one, so only fenced lines are candidates to run.
- */
-function commandLines(md: string, fencedOnly = false): string[] {
-  const out: string[] = [];
-  for (const { text, fenced } of logicalLines(md)) {
-    if (fenced) {
-      if (CLI_PREFIX.test(text)) out.push(text);
-    } else if (!fencedOnly) {
-      for (const m of text.matchAll(/`([^`]+)`/g)) if (CLI_PREFIX.test(m[1]!.trim())) out.push(m[1]!.trim());
-    }
-  }
-  return out;
-}
-
-/** Every command line in the fenced blocks of a document, whatever program it runs. */
-function shellLines(md: string): string[] {
-  return logicalLines(md).filter((l) => l.fenced && l.text !== '' && !l.text.startsWith('#')).map((l) => l.text);
-}
-
-/** The text under the first heading whose title matches, up to the next heading of the same or higher level. */
-function sectionOf(md: string, title: RegExp): string | undefined {
-  const lines = md.split('\n');
-  let level = 0;
-  const body: string[] = [];
-  let inFence = false;
-  for (const line of lines) {
-    if (/^\s*```/.test(line)) inFence = !inFence;
-    const heading = inFence ? null : /^(#{1,6})\s+(.+?)\s*$/.exec(line);
-    if (level === 0) {
-      if (heading && title.test(heading[2]!)) level = heading[1]!.length;
-    } else if (heading && heading[1]!.length <= level) {
-      break;
-    } else {
-      body.push(line);
-    }
-  }
-  return level === 0 ? undefined : body.join('\n');
-}
-
-/** GitHub's anchor for each heading: lower case, punctuation removed, spaces to hyphens, repeats suffixed. */
-function headingSlugs(md: string): Set<string> {
-  const slugs = new Set<string>();
-  const seen = new Map<string, number>();
-  let inFence = false;
-  for (const line of md.split('\n')) {
-    if (/^\s*```/.test(line)) { inFence = !inFence; continue; }
-    const m = inFence ? null : /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
-    if (!m) continue;
-    const slug = m[1]!.toLowerCase().replace(/<[^>]+>/g, '').replace(/`/g, '')
-      .replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s/g, '-');
-    const n = seen.get(slug) ?? 0;
-    seen.set(slug, n + 1);
-    slugs.add(n === 0 ? slug : `${slug}-${n}`);
-  }
-  return slugs;
-}
-
 // ---- Commands against the CLI ----------------------------------------------------
-
-const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** `agentsys --help` split into one usage block per command (a command may appear on several lines). */
 function helpSections(help: string): Map<string, string> {
@@ -152,22 +42,34 @@ function helpSections(help: string): Map<string, string> {
       sections.set(current, `${sections.get(current) ?? ''}${line}\n`);
     } else if (current && /^ {3,}\S/.test(line)) {
       sections.set(current, `${sections.get(current)}${line}\n`);
-    } else {
+    } else if (line.trim() !== '') {
       current = undefined;
     }
   }
   return sections;
 }
 
-const argvOf = (line: string): string[] =>
-  line.replace(CLI_PREFIX, '').replace(/"[^"]*"|'[^']*'/g, '""').trim().split(/\s+/);
+interface Word { text: string; quoted: boolean }
+
+/** The words of a command line. A quoted part keeps its spaces and loses its quotes; `quoted` marks a word that starts with a quote. */
+function wordsOf(line: string): Word[] {
+  return [...line.replace(CLI_PREFIX, '').matchAll(/(?:"[^"]*"|'[^']*'|\S)+/g)].map((m) => ({
+    text: m[0].replace(/"([^"]*)"|'([^']*)'/g, (_, a: string | undefined, b: string | undefined) => a ?? b ?? ''),
+    quoted: /^["']/.test(m[0]),
+  }));
+}
+
+const argvOf = (line: string): string[] => wordsOf(line).map((w) => w.text);
+
+/** The `--flag` names on a command line, without any `=value`; the value of another flag is not one. */
+const flagsOf = (line: string): string[] =>
+  wordsOf(line).filter((w) => !w.quoted && /^--[a-z]/.test(w.text)).map((w) => w.text.split('=')[0]!);
 
 /** One problem per documented command whose subcommand or flag the CLI does not advertise. */
 function commandProblems(lines: string[], sections: Map<string, string>, extraUsage: Map<string, string>): string[] {
   const problems: string[] = [];
   for (const line of lines) {
-    const argv = argvOf(line);
-    const sub = argv[0]!;
+    const sub = argvOf(line)[0] ?? '';
     if (sub === '--help') continue;
     const usage = sections.get(sub);
     if (usage === undefined) {
@@ -175,8 +77,7 @@ function commandProblems(lines: string[], sections: Map<string, string>, extraUs
       continue;
     }
     const known = usage + (extraUsage.get(sub) ?? '');
-    for (const token of argv.filter((t) => /^--[a-z]/.test(t))) {
-      const flag = token.split('=')[0]!;
+    for (const flag of flagsOf(line)) {
       if (!new RegExp(`(?<![\\w-])${escapeRe(flag)}(?![\\w-])`).test(known)) {
         problems.push(`${line}\n    "${sub}" has no ${flag} in its usage`);
       }
@@ -187,9 +88,15 @@ function commandProblems(lines: string[], sections: Map<string, string>, extraUs
 
 /** `agentsys grant` keeps its flags in its own usage text, not in `--help`. */
 async function cliUsage(): Promise<{ sections: Map<string, string>; extra: Map<string, string> }> {
-  const help = (await run(process.execPath, [CLI, '--help'], { timeout: 60_000 })).stdout;
-  const grant = (await run(process.execPath, [CLI, 'grant'], { timeout: 60_000 })).stdout;
-  return { sections: helpSections(help), extra: new Map([['grant', grant]]) };
+  const state = mkdtempSync(join(tmpdir(), 'agentsys-usage-'));
+  try {
+    const env = { ...process.env, AGENTSYS_STATE: state };
+    const help = (await run(process.execPath, [CLI, '--help'], { env, timeout: 60_000 })).stdout;
+    const grant = (await run(process.execPath, [CLI, 'grant'], { env, timeout: 60_000 })).stdout;
+    return { sections: helpSections(help), extra: new Map([['grant', grant]]) };
+  } finally {
+    rmSync(state, { recursive: true, force: true });
+  }
 }
 
 // ---- Running documented commands for real ----------------------------------------
@@ -203,7 +110,7 @@ async function cliUsage(): Promise<{ sections: Map<string, string>; extra: Map<s
 function isSafeToRun(line: string): boolean {
   const argv = argvOf(line);
   const [sub, second] = argv;
-  const flags = argv.filter((t) => t.startsWith('--'));
+  const flags = flagsOf(line);
   switch (sub) {
     case 'init': return flags.every((f) => f === '--operator');
     case 'readiness': return flags.every((f) => f === '--runtime');
@@ -222,8 +129,7 @@ function isSafeToRun(line: string): boolean {
 interface Ran { code: number; stdout: string; stderr: string }
 
 async function runDocumented(line: string, state: string): Promise<Ran> {
-  const argv = line.replace(CLI_PREFIX, '').match(/"[^"]*"|'[^']*'|\S+/g)!
-    .map((t) => t.replace(/^(["'])(.*)\1$/, '$2'));
+  const argv = argvOf(line);
   try {
     const { stdout, stderr } = await run(process.execPath, [CLI, ...argv], {
       env: { ...process.env, AGENTSYS_STATE: state },
@@ -242,7 +148,7 @@ const RUNTIMES = ['pi-local', 'codex-cloud', 'claude-web', 'claude-local'];
 /** What a documented command must print on a fresh state directory, and nothing more than that. */
 function resultProblems(line: string, ran: Ran): string[] {
   const argv = argvOf(line);
-  const sub = argv[0]!;
+  const sub = argv[0] ?? '';
   const out = `${ran.stdout}${ran.stderr}`;
   const problems: string[] = [];
   const expect = (ok: boolean, what: string): void => { if (!ok) problems.push(`${line}\n    ${what} (exit ${ran.code})`); };
@@ -251,7 +157,9 @@ function resultProblems(line: string, ran: Ran): string[] {
       expect(ran.code === 0 && /No autonomy grants are active/.test(out), 'init should exit 0 and say no grants are active');
       break;
     case 'readiness': {
-      const asked = argv.includes('--runtime') ? [argv[argv.indexOf('--runtime') + 1]!] : RUNTIMES;
+      const named = argv[argv.indexOf('--runtime') + 1];
+      expect(!argv.includes('--runtime') || named !== undefined, 'readiness --runtime needs a runtime id');
+      const asked = argv.includes('--runtime') ? (named === undefined ? [] : [named]) : RUNTIMES;
       expect(ran.code === 0 || ran.code === 1, 'readiness should exit 0 or 1');
       for (const rt of asked) expect(new RegExp(`^${escapeRe(rt)}: (ready|NOT READY)`, 'm').test(out), `readiness should report ${rt}`);
       break;
@@ -407,20 +315,28 @@ describe('the documented-command runner executes only what it may', () => {
     assert.equal(isSafeToRun('agentsys approve --as me --repo a/b'), false);
     assert.equal(isSafeToRun('agentsys grant create --as me'), false);
     assert.equal(isSafeToRun('agentsys loop arm --repo ~/src/x'), false);
+    assert.equal(isSafeToRun('agentsys dispatch --task t --approval=apv_1 --prompt x'), false);
+  });
+
+  it('fixture: a command line is read the same way when it is checked and when it is run', () => {
+    const line = 'agentsys dispatch --task t1 --prompt="two words" --note "--not-a-flag" --repo a/b';
+    assert.deepEqual(argvOf(line), ['dispatch', '--task', 't1', '--prompt=two words', '--note', '--not-a-flag', '--repo', 'a/b']);
+    assert.deepEqual(flagsOf(line), ['--task', '--prompt', '--note', '--repo']);
+    assert.deepEqual(argvOf('agentsys '), []);
+    assert.ok(resultProblems('agentsys readiness --runtime', { code: 0, stdout: '', stderr: '' }).length > 0, 'a --runtime with no id is reported');
   });
 
   it('fixture: documented first-run commands are executed, in a temp state, and leave the real one alone', async () => {
-    const realState = process.env['AGENTSYS_STATE'];
     const before = snapshot(join(repoRoot, '.state'));
-    const problems = await documentedRunProblems([
+    const documented = [
       'agentsys init --operator you@example.com',
       'agentsys status',
       'agentsys dispatch --task t1 --repo example-org/larkspur --class ci-repair --runtime pi-local --profile default --actions author-changes --estimate-five-hour 1 --estimate-weekly 1 --estimate-basis operator-bound --prompt "should not run"',
       'agentsys usage',
-    ]);
-    assert.deepEqual(problems, []);
+    ];
+    assert.deepEqual(documented.filter(isSafeToRun), documented.slice(0, 3), 'only `usage` is refused');
+    assert.deepEqual(await documentedRunProblems(documented), []);
     assert.equal(snapshot(join(repoRoot, '.state')), before, 'the repository .state directory changed');
-    assert.equal(process.env['AGENTSYS_STATE'], realState);
   });
 
   it('fixture: a documented result that differs from what the CLI prints fails', async () => {
@@ -538,7 +454,8 @@ describe('the documents link only to what exists', () => {
   }
 
   it('the README states the Node version package.json requires', () => {
-    const pkg = JSON.parse(read(join(repoRoot, 'package.json'))) as { engines: { node: string } };
+    const pkg = JSON.parse(read(join(repoRoot, 'package.json'))) as { engines?: { node?: string } };
+    assert.ok(pkg.engines?.node, 'package.json has no engines.node');
     assert.deepEqual(nodeVersionProblems(read(README_PATH), pkg.engines.node), []);
   });
 });
