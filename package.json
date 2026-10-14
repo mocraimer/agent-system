@@ -1,0 +1,50 @@
+{
+  "name": "agent-system",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Operator-controlled coordinator for approved coding-agent tasks",
+  "license": "MIT",
+  "author": "Mordechai Craimer",
+  "homepage": "https://github.com/mocraimer/agent-system#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mocraimer/agent-system.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mocraimer/agent-system/issues"
+  },
+  "keywords": [
+    "coding-agents",
+    "claude-code",
+    "codex",
+    "automation",
+    "github"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "bin": {
+    "agentsys": "./dist/cli/main.js",
+    "agentsys-mcp": "./dist/mcp/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-fixtures.mjs && node scripts/copy-ui-assets.mjs && node scripts/stamp-build.mjs",
+    "mcp": "node dist/mcp/server.js",
+    "ui": "node dist/cli/main.js ui",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "test:unit": "node --test \"dist/**/*.test.js\"",
+    "test:ui": "npm run build && playwright test",
+    "rungs:refresh": "npm run build && node dist/eval/refresh-rungs.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.9.0",
+    "eslint": "^9.13.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.12.0"
+  }
+}

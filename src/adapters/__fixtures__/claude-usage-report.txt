@@ -1,0 +1,22 @@
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 19% used · resets Sep 9, 1:09am (Europe/Athens)
+Current week (all models): 27% used · resets Sep 11, 1:59am (Europe/Athens)
+Current week (Fable): 38% used · resets Sep 11, 1:59am (Europe/Athens)
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.
+
+Last 24h · 158 requests · 1 session
+  100% of your usage came from subagent-heavy sessions
+  64% of your usage was at >150k context
+  Top skills: /manifest-dev:just-do 3%
+  Top subagents: Explore 40%
+  Top plugins: manifest-dev 3%
+
+Last 7d · 1023 requests · 3 sessions
+  97% of your usage came from subagent-heavy sessions
+  85% of your usage was at >150k context
+  Top skills: /manifest-dev:design 10%, /manifest-dev:just-do 4%, /manifest-dev:review-design 2%, /manifest-dev-tools:prompt-engineering 1%
+  Top subagents: general-purpose 8%, Explore 3%, manifest-dev:design 1%, manifest-dev:just-do 1%
+  Top plugins: manifest-dev 19%, manifest-dev-tools 1%

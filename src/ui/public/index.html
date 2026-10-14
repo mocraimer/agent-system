@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent system control</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="loop-mark" id="loop-mark" viewBox="0 0 32 32" aria-hidden="true"><circle class="ring" cx="16" cy="16" r="11" /><circle class="dot" cx="27" cy="16" r="2.6" /></svg>
+      <div>
+        <p class="eyebrow">Local operator workspace</p>
+        <h1>Agent system control</h1>
+      </div>
+    </div>
+    <div id="state-line" class="state-line" aria-live="polite"></div>
+    <div id="session-status" class="session-status">Connecting…</div>
+  </header>
+  <nav class="nav" aria-label="Primary">
+    <button data-view="board" class="nav-button active">Board</button>
+    <button data-view="inbox" class="nav-button">Inbox <span id="inbox-count" class="nav-count" hidden></span></button>
+    <button data-view="activity" class="nav-button">Activity</button>
+    <button data-view="steer" class="nav-button">Steer</button>
+    <button data-view="inspect" class="nav-button">Inspect</button>
+    <button data-view="advanced" class="nav-button">Advanced</button>
+  </nav>
+  <main id="app" class="content" aria-live="polite">
+    <section class="panel loading" role="status"><p>Loading local coordinator state…</p></section>
+  </main>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
