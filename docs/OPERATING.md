@@ -78,11 +78,19 @@ agentsys floor --repo owner/name --pr-base dev --as you@example.com    # require
 agentsys floor --repo owner/name --clear-pr-base --as you@example.com  # remove the requirement
 agentsys floor --read-only-project <cloud-project-id> --as you@example.com   # block writes to a cloud project
 agentsys floor --writable-project <cloud-project-id> --as you@example.com    # allow it again
+agentsys floor --prompt-proposals owner/name --as you@example.com         # let improve open prompt PRs there
+agentsys floor --clear-prompt-proposals --as you@example.com              # keep prompt changes as local drafts
 ```
 
 Settings live in `floor.json` in the state directory. The loop, console, and
 CLI read a repository's integration base from the floor; if none is set, they
 use `main`.
+
+A prompt-change pull request from [the improve stage](#the-improve-stage) quotes
+your target repository's name, local paths and run evidence. It opens only when
+the coordinator checkout's `origin` is the repository `--prompt-proposals`
+names. Leave it unset while `origin` is a public upstream; the stage then saves
+each draft under the state directory.
 
 ### Check what each runtime needs
 
@@ -1326,7 +1334,10 @@ store's `improve` tier — a new tier row, or an edit to the stage's prompt temp
 — replays the frozen cases of the stage's kind on the knob as it is and as drafted,
 where the stage is replayable, and opens one pull request in the repository that
 owns the change: the coordinator's for a prompt, the store's base branch for a
-tier. The body carries the ranking, the rule quoted from the store configuration,
+tier. A prompt change goes to the coordinator's repository only when the floor
+names it with `--prompt-proposals`; otherwise the stage writes the drafted
+template and the pull request body to `improve-drafts/<branch>/` under the
+loop's state directory and opens nothing. The body carries the ranking, the rule quoted from the store configuration,
 the trial comparison as `replay compare` prints it, and the command and
 directories that produced them. A change to a stage with no replayable case kind — any
 stage but review, today — says so in its body and rests on the counts.

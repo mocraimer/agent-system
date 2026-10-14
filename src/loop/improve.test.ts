@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -13,8 +13,10 @@ import { freezeIncidentCase } from '../eval/cases.js';
 import { listTrials } from '../eval/oracle.js';
 import type { Scorecard } from '../eval/scorecard.js';
 import { saveScorecard } from '../eval/scorecard.js';
+import { writeFloor } from '../core/floor.js';
 import { GitRepo } from './git.js';
 import { runPass } from './pass.js';
+import { improveDeps } from './runner.js';
 import { parseStoreConfig } from './policy.js';
 import { promptDigest, promptDigestOf, promptTemplate } from './prompts.js';
 import { improveBranch, improveSettings, knobRows, parseDraft, rankKnobs, renderRanking } from './stages/improve.js';
@@ -156,6 +158,45 @@ describe('a real pass opens exactly one pull request with its evidence, and edit
     await pass();
     assert.equal(coordinatorStore.pulls.length, 1, 'a second pass updates the same pull request');
     assert.ok(coordinatorStore.writes.some((w) => w.kind === 'update-pull' && w.target === pr.number));
+  });
+
+  it('saves a prompt draft in the state directory, and opens nothing, when no coordinator repository is named for proposals', async () => {
+    for (const c of reviewCards(10, promptDigest('review'), 3)) saveScorecard(c);
+    const drafted = promptTemplate('review').replace('What to judge, in order:', 'What to judge, in order (retry loops need a bound):');
+    const commands = new FakeCommands((input: DispatchTaskInput) => {
+      writeFileSync(outputFileIn(input.prompt)!, JSON.stringify({ kind: 'prompt', template: drafted, rationale: 'Three reviews were rejected for missing unbounded retries.' }));
+      return completed(input);
+    });
+    const store = new FakeStore();
+    const report = await runPass({
+      repo: new FakeRepo(config()), store, commands, rules: fixtureRules(),
+      improve: { targetGit: new GitRepo(dir), command: 'x', pull: () => Promise.resolve({ title: 't', body: '' }) },
+    }, { dryRun: false, stages: ['improve'] });
+
+    const item = report.stages.find((s) => s.stage === 'improve')!.items[0]!;
+    assert.match(item.reason, /saved as a draft instead: no prompt proposal repository is named in the floor/);
+    const saved = /saved the draft to (\S+);/.exec(item.result ?? '')?.[1];
+    assert.ok(saved, item.result);
+    assert.equal(readFileSync(join(saved, 'review.md'), 'utf8'), drafted);
+    const body = readFileSync(join(saved, 'pull-request.md'), 'utf8');
+    for (const needle of ['# improve(loop): the review prompt', '### The rule that picked it', '### Trials']) assert.ok(body.includes(needle), `the draft carries ${needle}`);
+    assert.deepEqual(store.writes, [], 'nothing is written to any repository');
+  });
+
+  it('proposes prompts in the coordinator\'s own repository only when the floor names it', async () => {
+    const { path } = coordinatorRepo();
+    const deps = async () => {
+      const lines: string[] = [];
+      const d = await improveDeps(new GitRepo(dir), 'example-org/larkspur', path, (l) => lines.push(l));
+      return { coordinator: d.coordinator?.slug, lines };
+    };
+    const unnamed = await deps();
+    assert.equal(unnamed.coordinator, undefined, 'a fresh floor names no repository');
+    assert.ok(unnamed.lines.some((l) => l.includes('saved as drafts, not proposed in fixture/coordinator')), unnamed.lines.join('\n'));
+    writeFloor({ prBases: {}, readOnlyProjects: [], promptProposals: 'example-org/somewhere-else' });
+    assert.equal((await deps()).coordinator, undefined, 'a floor naming another repository proposes nothing here');
+    writeFloor({ prBases: {}, readOnlyProjects: [], promptProposals: 'fixture/coordinator' });
+    assert.equal((await deps()).coordinator, 'fixture/coordinator');
   });
 
   it('drafts on the option of its own stage that can start when the first cannot, and refers to the knob\'s own tier row', async () => {

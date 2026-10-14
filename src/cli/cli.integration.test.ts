@@ -354,6 +354,10 @@ describe('the operator floor through the real CLI', () => {
     await agentsys('floor', '--repo', 'example-org/larkspur', '--clear-pr-base', '--as', OP);
     await agentsys('floor', '--writable-project', 'larkspur-prod', '--as', OP);
     assert.deepEqual(JSON.parse((await agentsys('floor', '--show')).stdout), { prBases: {}, readOnlyProjects: [] });
+    assert.equal((await agentsys('floor', '--prompt-proposals', 'example-org/agent-system-ops', '--as', OP)).code, 0);
+    assert.equal(JSON.parse((await agentsys('floor', '--show')).stdout).promptProposals, 'example-org/agent-system-ops');
+    await agentsys('floor', '--clear-prompt-proposals', '--as', OP);
+    assert.deepEqual(JSON.parse((await agentsys('floor', '--show')).stdout), { prBases: {}, readOnlyProjects: [] });
   });
 });
 
