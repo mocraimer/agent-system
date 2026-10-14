@@ -13,7 +13,7 @@ const CANDIDATE: CandidateIdentity = {
 
 const REQUIRED: RequiredCheck[] = [
   { name: 'unit', requiredClass: 'emulator' },
-  { name: 'real-transcription', requiredClass: 'real-provider', fixtureVersion: 'penguin-v1' },
+  { name: 'real-import', requiredClass: 'real-provider', fixtureVersion: 'bookshelf-v1' },
 ];
 
 function item(over: Partial<EvidenceItem> = {}): EvidenceItem {
@@ -29,12 +29,12 @@ function item(over: Partial<EvidenceItem> = {}): EvidenceItem {
 }
 
 const realItem = (over: Partial<EvidenceItem> = {}): EvidenceItem =>
-  item({ check: 'real-transcription', class: 'real-provider', fixtureVersion: 'penguin-v1', ...over });
+  item({ check: 'real-import', class: 'real-provider', fixtureVersion: 'bookshelf-v1', ...over });
 
 describe('evidence that cannot satisfy a check', () => {
   it('missing evidence leaves the check unmet, not passed', () => {
     const r = aggregate(CANDIDATE, REQUIRED, [item()]);
-    const v = r.verdicts.find((x) => x.check === 'real-transcription')!;
+    const v = r.verdicts.find((x) => x.check === 'real-import')!;
     assert.equal(v.satisfied, false);
     assert.equal(v.disqualifier, 'missing');
     assert.equal(r.accepted, false);
@@ -45,7 +45,7 @@ describe('evidence that cannot satisfy a check', () => {
     const olderReport = [item()];
     const r = aggregate(CANDIDATE, REQUIRED, olderReport);
     assert.equal(r.accepted, false);
-    assert.equal(r.verdicts.find((x) => x.check === 'real-transcription')?.disqualifier, 'missing');
+    assert.equal(r.verdicts.find((x) => x.check === 'real-import')?.disqualifier, 'missing');
   });
 
   it('a skipped check has not run', () => {
@@ -60,7 +60,7 @@ describe('evidence that cannot satisfy a check', () => {
 
   it('a mock cannot satisfy a real-provider check', () => {
     const r = aggregate(CANDIDATE, REQUIRED, [item(), realItem({ class: 'mocked' })]);
-    const v = r.verdicts.find((x) => x.check === 'real-transcription')!;
+    const v = r.verdicts.find((x) => x.check === 'real-import')!;
     assert.equal(v.disqualifier, 'wrong-class');
     assert.match(v.detail, /A mock cannot stand in for a real call/);
   });
@@ -70,23 +70,23 @@ describe('evidence that cannot satisfy a check', () => {
       item(),
       realItem({ candidate: { ...CANDIDATE, head: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' } }),
     ]);
-    assert.equal(r.verdicts.find((x) => x.check === 'real-transcription')?.disqualifier, 'superseded');
+    assert.equal(r.verdicts.find((x) => x.check === 'real-import')?.disqualifier, 'superseded');
   });
 
   it('unreadable evidence is not a pass', () => {
     const r = aggregate(CANDIDATE, REQUIRED, [item(), realItem({ inaccessible: true })]);
-    assert.equal(r.verdicts.find((x) => x.check === 'real-transcription')?.disqualifier, 'inaccessible');
+    assert.equal(r.verdicts.find((x) => x.check === 'real-import')?.disqualifier, 'inaccessible');
   });
 
   it('stale evidence cannot stand for the candidate', () => {
     const old = new Date(Date.now() - 48 * 3600_000).toISOString();
     const r = aggregate(CANDIDATE, REQUIRED, [item(), realItem({ observedAt: old })]);
-    assert.equal(r.verdicts.find((x) => x.check === 'real-transcription')?.disqualifier, 'stale');
+    assert.equal(r.verdicts.find((x) => x.check === 'real-import')?.disqualifier, 'stale');
   });
 
   it('a wrong fixture version is a configuration mismatch', () => {
-    const r = aggregate(CANDIDATE, REQUIRED, [item(), realItem({ fixtureVersion: 'penguin-v0' })]);
-    assert.equal(r.verdicts.find((x) => x.check === 'real-transcription')?.disqualifier, 'configuration-mismatch');
+    const r = aggregate(CANDIDATE, REQUIRED, [item(), realItem({ fixtureVersion: 'bookshelf-v0' })]);
+    assert.equal(r.verdicts.find((x) => x.check === 'real-import')?.disqualifier, 'configuration-mismatch');
   });
 
   it('a matching frontend SHA is not sufficient backend identity', () => {
@@ -94,7 +94,7 @@ describe('evidence that cannot satisfy a check', () => {
       item(),
       realItem({ candidate: { ...CANDIDATE, backendRevisions: { processUpload: 'rev-01' } } }),
     ]);
-    const v = r.verdicts.find((x) => x.check === 'real-transcription')!;
+    const v = r.verdicts.find((x) => x.check === 'real-import')!;
     assert.equal(v.disqualifier, 'configuration-mismatch');
     assert.match(v.detail, /not sufficient backend identity/);
   });
@@ -143,7 +143,7 @@ describe('acceptance is not a completion message', () => {
 });
 
 /**
- * The operator deferred live Premiere verification for this phase. These cases use
+ * The operator deferred live extension verification for this phase. These cases use
  * LABELLED DETERMINISTIC FIXTURES — the candidate, checks and evidence below are test
  * data, not records of a real run. They establish how the selection behaves; they are
  * not, and cannot be, the real evidence the retained gates still owe.
@@ -151,24 +151,24 @@ describe('acceptance is not a completion message', () => {
 describe('a deferred check neither blocks nor counts as coverage', () => {
   const OPERATOR = 'operator@example.test';
   const deferral = {
-    reason: 'Live Premiere verification deferred by the operator for this phase',
+    reason: 'Live extension verification deferred by the operator for this phase',
     deferredBy: OPERATOR,
     deferredAt: '2026-09-09T11:51:34Z',
   };
   const withNative = (over: Partial<RequiredCheck> = {}): RequiredCheck[] => [
     ...REQUIRED,
-    { name: 'premiere-native-journey', requiredClass: 'native', deferral, ...over },
+    { name: 'extension-native-journey', requiredClass: 'native', deferral, ...over },
   ];
 
   it('lets the current scope complete while the deferred check has no evidence', () => {
     const report = aggregate(CANDIDATE, withNative(), [item(), realItem()]);
     assert.equal(report.accepted, true, 'the deferred check must not block the phase');
-    assert.deepEqual(report.deferred, ['premiere-native-journey']);
+    assert.deepEqual(report.deferred, ['extension-native-journey']);
   });
 
   it('reports the deferred check as untested rather than passed or absent', () => {
     const report = aggregate(CANDIDATE, withNative(), [item(), realItem()]);
-    const v = report.verdicts.find((x) => x.check === 'premiere-native-journey');
+    const v = report.verdicts.find((x) => x.check === 'extension-native-journey');
     assert.ok(v, 'a deferred check still appears in the report');
     assert.equal(v.satisfied, false, 'deferred is not satisfied');
     assert.equal(v.deferred, true);
@@ -178,7 +178,7 @@ describe('a deferred check neither blocks nor counts as coverage', () => {
 
   it('names the deferred scope in the sentence that states the result', () => {
     const report = aggregate(CANDIDATE, withNative(), [item(), realItem()]);
-    assert.match(report.scopeStatement, /Deferred and therefore untested, not passed: premiere-native-journey/);
+    assert.match(report.scopeStatement, /Deferred and therefore untested, not passed: extension-native-journey/);
   });
 
   it('does not count a deferred check as native coverage that was met', () => {
@@ -191,21 +191,21 @@ describe('a deferred check neither blocks nor counts as coverage', () => {
     // Only the emulator check is offered; the real-provider one is absent.
     const report = aggregate(CANDIDATE, withNative(), [item()]);
     assert.equal(report.accepted, false, 'a deferral elsewhere cannot excuse a missing real check');
-    const v = report.verdicts.find((x) => x.check === 'real-transcription');
+    const v = report.verdicts.find((x) => x.check === 'real-import');
     assert.equal(v?.disqualifier, 'missing');
   });
 
   it('still blocks on a failed web/backend check while native is deferred', () => {
     const report = aggregate(CANDIDATE, withNative(), [item(), realItem({ reportedOutcome: 'failed' })]);
     assert.equal(report.accepted, false);
-    assert.equal(report.verdicts.find((x) => x.check === 'real-transcription')?.disqualifier, 'failed');
+    assert.equal(report.verdicts.find((x) => x.check === 'real-import')?.disqualifier, 'failed');
   });
 
   it('blocks again when a configuration explicitly requires the deferred check', () => {
     const report = aggregate(CANDIDATE, withNative(), [item(), realItem()],
-      { enforceDeferred: ['premiere-native-journey'] });
+      { enforceDeferred: ['extension-native-journey'] });
     assert.equal(report.accepted, false, 'asking for the check back puts it back to blocking');
-    const v = report.verdicts.find((x) => x.check === 'premiere-native-journey');
+    const v = report.verdicts.find((x) => x.check === 'extension-native-journey');
     assert.equal(v?.deferred, undefined);
     assert.equal(v?.disqualifier, 'missing');
     assert.match(v?.detail ?? '', /this configuration requires it anyway/);
@@ -214,10 +214,10 @@ describe('a deferred check neither blocks nor counts as coverage', () => {
 
   it('accepts an enforced deferred check when its real evidence is actually there', () => {
     const nativeEvidence = item({
-      check: 'premiere-native-journey', class: 'native', source: 'native-run-1',
+      check: 'extension-native-journey', class: 'native', source: 'native-run-1',
     });
     const report = aggregate(CANDIDATE, withNative(), [item(), realItem(), nativeEvidence],
-      { enforceDeferred: ['premiere-native-journey'] });
+      { enforceDeferred: ['extension-native-journey'] });
     assert.equal(report.accepted, true);
     assert.equal(report.byClass.native.satisfied, 1);
   });
@@ -226,7 +226,7 @@ describe('a deferred check neither blocks nor counts as coverage', () => {
     const forged: RequiredCheck[] = [
       ...REQUIRED,
       {
-        name: 'premiere-native-journey',
+        name: 'extension-native-journey',
         requiredClass: 'native',
         deferral: { ...deferral, deferredBy: 'run_abc123' },
       },
@@ -239,11 +239,11 @@ describe('a deferred check neither blocks nor counts as coverage', () => {
   it('does not rewrite an earlier failure as a success when the scope changes', () => {
     // The same candidate, judged before and after the deferral. The real check that
     // failed then still fails now; deferring native scope changes nothing about it.
-    const before = aggregate(CANDIDATE, [...REQUIRED, { name: 'premiere-native-journey', requiredClass: 'native' }],
+    const before = aggregate(CANDIDATE, [...REQUIRED, { name: 'extension-native-journey', requiredClass: 'native' }],
       [item(), realItem({ reportedOutcome: 'failed' })]);
     const after = aggregate(CANDIDATE, withNative(), [item(), realItem({ reportedOutcome: 'failed' })]);
     assert.equal(before.accepted, false);
     assert.equal(after.accepted, false, 'a scope change cannot turn a failed check green');
-    assert.equal(after.verdicts.find((x) => x.check === 'real-transcription')?.disqualifier, 'failed');
+    assert.equal(after.verdicts.find((x) => x.check === 'real-import')?.disqualifier, 'failed');
   });
 });
