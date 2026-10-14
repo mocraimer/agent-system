@@ -1,0 +1,19 @@
+# agent-system
+
+> A command-line coordinator that runs Claude Code, Pi, Codex cloud and Claude Code web on work an operator approved, inside the subscription's allowance, and keeps evidence of every run. A fresh install runs nothing until an approval or a grant exists.
+
+## Start here
+
+- [README](https://raw.githubusercontent.com/mocraimer/agent-system/main/README.md): What you can do, what it never does, what each runtime needs, and a quick start that ends at a refused dispatch.
+- [Agent setup steps](https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/AGENT-SETUP.md): Numbered steps for a coding agent, with the expected result of each, and where to stop for the person.
+
+## Guides
+
+- [Operator guide](https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/OPERATING.md): Setup, authorizing work, subscription admission, the ticket loop, evidence, evaluation and updating.
+- [Local MCP server](https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/MCP.md): The stdio MCP server, its seven tools, and what it cannot do.
+- [Local control UI](https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/CONTROL-UI.md): The operator console and what each action calls.
+- [Ticket loop example](https://raw.githubusercontent.com/mocraimer/agent-system/main/examples/ticket-loop/README.md): A worked example of running the loop against a made-up product repository.
+
+## Page
+
+- [Explainer page](https://mocraimer.github.io/agent-system/): What it does, what it never does, and how to start.
