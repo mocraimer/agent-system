@@ -55,23 +55,48 @@ function proseOf(md: string): string {
   return kept.join('\n');
 }
 
+/** One logical line of a document: a fenced line, with backslash continuations joined, or a prose line. */
+interface Logical { text: string; fenced: boolean }
+
+function logicalLines(md: string): Logical[] {
+  const out: Logical[] = [];
+  const lines = md.split('\n');
+  const isFence = (l: string): boolean => /^\s*```/.test(l);
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (isFence(lines[i]!)) { inFence = !inFence; continue; }
+    if (!inFence) { out.push({ text: lines[i]!, fenced: false }); continue; }
+    let line = lines[i]!.trim();
+    while (line.endsWith('\\') && i + 1 < lines.length && !isFence(lines[i + 1]!)) {
+      line = `${line.slice(0, -1).trimEnd()} ${lines[++i]!.trim()}`;
+    }
+    out.push({ text: line.replace(/\s+#\s.*$/, '').trim(), fenced: true });
+  }
+  return out;
+}
+
 /**
- * Every command line in a fenced block that starts with `agentsys ` or
- * `node dist/cli/main.js `: backslash continuations joined, trailing comments dropped.
+ * Every `agentsys ...` or `node dist/cli/main.js ...` command in a document, in order: lines
+ * in fenced blocks (continuations joined, trailing comments dropped) and, unless `fencedOnly`,
+ * inline code spans in prose. A span that does not start with the program name, such as
+ * `approve --task`, is not one. A fenced line is a whole command; an inline span may name only
+ * part of one, so only fenced lines are candidates to run.
  */
-function commandLines(md: string): string[] {
+function commandLines(md: string, fencedOnly = false): string[] {
   const out: string[] = [];
-  for (const block of fencedBlocks(md)) {
-    for (let i = 0; i < block.length; i++) {
-      let line = block[i]!.trim();
-      while (line.endsWith('\\') && i + 1 < block.length) {
-        line = `${line.slice(0, -1).trimEnd()} ${block[++i]!.trim()}`;
-      }
-      line = line.replace(/\s+#\s.*$/, '').trim();
-      if (CLI_PREFIX.test(line)) out.push(line);
+  for (const { text, fenced } of logicalLines(md)) {
+    if (fenced) {
+      if (CLI_PREFIX.test(text)) out.push(text);
+    } else if (!fencedOnly) {
+      for (const m of text.matchAll(/`([^`]+)`/g)) if (CLI_PREFIX.test(m[1]!.trim())) out.push(m[1]!.trim());
     }
   }
   return out;
+}
+
+/** Every command line in the fenced blocks of a document, whatever program it runs. */
+function shellLines(md: string): string[] {
+  return logicalLines(md).filter((l) => l.fenced && l.text !== '' && !l.text.startsWith('#')).map((l) => l.text);
 }
 
 /** The text under the first heading whose title matches, up to the next heading of the same or higher level. */
@@ -143,6 +168,7 @@ function commandProblems(lines: string[], sections: Map<string, string>, extraUs
   for (const line of lines) {
     const argv = argvOf(line);
     const sub = argv[0]!;
+    if (sub === '--help') continue;
     const usage = sections.get(sub);
     if (usage === undefined) {
       problems.push(`${line}\n    no command "${sub}" in \`agentsys --help\``);
@@ -330,7 +356,7 @@ const FIXTURE_USAGE = helpSections([
 
 describe('the documented-command check catches drift', () => {
   it('fixture: real commands pass', () => {
-    const md = ['```bash', 'agentsys init --operator you@example.com   # name the operator', 'node dist/cli/main.js status --task t1', '```'].join('\n');
+    const md = ['```bash', 'agentsys init --operator you@example.com   # name the operator', 'node dist/cli/main.js status --task t1', '```', 'Run `agentsys --help` to list them.'].join('\n');
     assert.deepEqual(commandProblems(commandLines(md), FIXTURE_USAGE, new Map()), []);
   });
 
@@ -350,16 +376,25 @@ describe('the documented-command check catches drift', () => {
     assert.match(problems[1]!, /"loop" has no --repos/);
   });
 
-  it('fixture: continuations, trailing comments and prose lines are read as the command they are', () => {
+  it('fixture: continuations and trailing comments are read as the command they are', () => {
     const md = [
-      'Run `agentsys bogus` in prose; it is not a command line.',
       '```',
       'agentsys loop --repo ~/src/x \\',
       '  --once   # one pass',
       '# agentsys bogus',
+      'npm run build',
       '```',
     ].join('\n');
     assert.deepEqual(commandLines(md), ['agentsys loop --repo ~/src/x --once']);
+    assert.deepEqual(shellLines(md), ['agentsys loop --repo ~/src/x --once', 'npm run build']);
+  });
+
+  it('fixture: an inline command in prose is checked in document order, and a span without the program name is not a command', () => {
+    const md = ['Run `agentsys status` first.', '```', 'agentsys init --operator me', '```', 'Not `approve --task <id>`, and not `npm ci`.'].join('\n');
+    assert.deepEqual(commandLines(md), ['agentsys status', 'agentsys init --operator me']);
+    assert.deepEqual(commandLines(md, true), ['agentsys init --operator me']);
+    const problems = commandProblems(commandLines('See `agentsys bogus --x`.'), FIXTURE_USAGE, new Map());
+    assert.equal(problems.length, 1);
   });
 });
 
@@ -478,7 +513,7 @@ describe('the documents match the CLI they describe', () => {
     });
 
     it(`the safe ${name} commands run for real in a temp state and print what the document says`, async () => {
-      const lines = commandLines(read(path));
+      const lines = commandLines(read(path), true);
       assert.ok(lines.some(isSafeToRun), `${name} documents no command the check can run`);
       assert.deepEqual(await documentedRunProblems(lines), []);
     });
@@ -487,9 +522,9 @@ describe('the documents match the CLI they describe', () => {
   it('every README quick-start command appears verbatim in the agent runbook', () => {
     const quickStart = sectionOf(read(README_PATH), /^Quick start$/i);
     assert.ok(quickStart, 'README has no "Quick start" section');
-    const wanted = commandLines(quickStart);
+    const wanted = shellLines(quickStart);
     assert.ok(wanted.length > 0, 'README quick start holds no command');
-    const have = new Set(commandLines(read(SETUP_PATH)).map((l) => l.replace(/\s+/g, ' ')));
+    const have = new Set(shellLines(read(SETUP_PATH)).map((l) => l.replace(/\s+/g, ' ')));
     const missing = wanted.filter((l) => !have.has(l.replace(/\s+/g, ' ')));
     assert.deepEqual(missing, [], 'in README quick start but not in docs/AGENT-SETUP.md');
   });
