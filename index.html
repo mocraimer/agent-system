@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>agent-system — coding agents run only on work you approved</title>
-<meta name="description" content="A command-line coordinator that runs Claude Code, Pi, Codex cloud and Claude Code web on work you approved, inside your subscription's allowance, and keeps evidence of every run.">
+<meta name="description" content="A command-line coordinator that runs Claude Code, Pi, Codex cloud, and Claude Code web on work you approved, inside your subscription's allowance, and keeps evidence of every run.">
 <meta name="theme-color" content="#070a11">
 <link rel="canonical" href="https://mocraimer.github.io/agent-system/">
 <meta property="og:type" content="website">
@@ -228,7 +228,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
     <div>
       <div class="chip rv" style="--d:.05s"><i></i>Open source · MIT · Node.js 22.12+</div>
       <h1 class="rv" style="--d:.15s">Coding agents run only on work <em>you approved.</em></h1>
-      <p class="lede rv" style="--d:.3s">agent-system is a command-line coordinator for Claude Code, Pi, Codex cloud and Claude Code web. You approve the work. It keeps each run inside your subscription's allowance and saves what the run did.</p>
+      <p class="lede rv" style="--d:.3s">agent-system is a command-line coordinator for Claude Code, Pi, Codex cloud, and Claude Code web. You approve the work. It keeps each run inside your subscription's allowance and saves what the run did.</p>
       <div class="cta-row rv" style="--d:.45s">
         <a class="btn" href="#install">Install</a>
         <a class="btn ghost" href="https://github.com/mocraimer/agent-system#readme">Read the README</a>
@@ -258,13 +258,13 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
     <li><b>Request</b>A task, a repository, a runtime, the actions it may take</li>
     <li class="gate"><b>Authority</b>An approval or a grant covers this exact work</li>
     <li class="gate"><b>Admission</b>The job fits the allowance left in every usage window</li>
-    <li><b>Runtime</b>Claude Code, Pi, Codex cloud or Claude Code web</li>
-    <li><b>Evidence</b>Transcript, checks and a scorecard, saved per run</li>
+    <li><b>Runtime</b>Claude Code, Pi, Codex cloud, or Claude Code web</li>
+    <li><b>Evidence</b>Transcript, checks, and a scorecard, saved per run</li>
   </ol>
   <div class="checks">
     <div class="card">
       <h3>Authority</h3>
-      <p>An <b>approval</b> covers one task. A <b>grant</b> covers a class of work until you narrow or revoke it. Only the operator, the person who owns the installation, creates either. Text that an agent or a forge wrote is data, never an instruction.</p>
+      <p>An <b>approval</b> covers one task. A <b>grant</b> covers a class of work until you narrow or revoke it. Only the operator, the person who owns the installation, creates either. Text that an agent or a code host such as GitHub wrote is data, never an instruction.</p>
     </div>
     <div class="card">
       <h3>Admission</h3>
@@ -278,7 +278,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
   <h2>Seven things you can do with it.</h2>
   <ol class="jobs">
     <li>
-      <div><h3>Run one approved task</h3><p>Approve a task for one repository, runtime and set of actions, then dispatch it.</p></div>
+      <div><h3>Run one approved task</h3><p>Approve a task for one repository, runtime, and set of actions, then dispatch it.</p></div>
       <div class="how"><span>agentsys approve</span><span>agentsys dispatch</span><a href="https://github.com/mocraimer/agent-system/blob/main/docs/OPERATING.md#approving-one-task">Approving one task →</a></div>
     </li>
     <li>
@@ -294,7 +294,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
       <div class="how"><span>agentsys ui --repo &lt;path&gt;</span><a href="https://github.com/mocraimer/agent-system/blob/main/docs/CONTROL-UI.md">Local control UI →</a></div>
     </li>
     <li>
-      <div><h3>Connect a local agent over MCP</h3><p>A stdio MCP server that reads status, jobs, usage, readiness and evidence, and dispatches inside authority you already gave. It cannot create authority.</p></div>
+      <div><h3>Connect a local agent over MCP</h3><p>A stdio MCP server that reads status, jobs, usage, readiness, evaluation, and evidence, and dispatches inside authority you already gave. It cannot create authority.</p></div>
       <div class="how"><span>agentsys-mcp</span><a href="https://github.com/mocraimer/agent-system/blob/main/docs/MCP.md">Local MCP server →</a></div>
     </li>
     <li>
@@ -370,7 +370,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
   <h2>It records what happened, and says when it <em>does not know.</em></h2>
   <div class="cols">
     <ul class="facts">
-      <li>Each run keeps its transcript, event log and artifacts under <code>evidence/&lt;run-id&gt;/</code> in the state directory.</li>
+      <li>Each run keeps its transcript, event log, and artifacts under <code>evidence/&lt;run-id&gt;/</code> in the state directory.</li>
       <li>A scorecard keeps three things apart: what the checks reported, what the agent said about itself, and what you thought of the result.</li>
       <li>Reports give counts, not rates.</li>
       <li>A Claude Code web dispatch ends as <code>remote-uncertain</code>, not <code>completed</code>, because the cloud acknowledges the prompt and reports nothing else.</li>
@@ -389,7 +389,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
 <section class="chapter" id="console" data-ch>
   <div class="chip"><i></i>06 · The console</div>
   <h2>See what <em>needs you.</em></h2>
-  <p style="max-width:42em;margin-bottom:20px">A local console, bound to loopback, over the loop's tickets and pull requests. It shows what waits for your decision, with the evidence beside it. Every screenshot uses made-up data from the Larkspur example.</p>
+  <p style="max-width:42em;margin-bottom:20px">The console is a local page, bound to loopback. It shows the loop's tickets and pull requests and what waits for your decision, with the evidence beside it. Every screenshot uses made-up data from the Larkspur example.</p>
   <div class="tabs" role="tablist" aria-label="Console screenshots" id="consoleTabs">
     <button role="tab" id="t-board" aria-controls="p-board" aria-selected="true">Board</button>
     <button role="tab" id="t-inbox" aria-controls="p-inbox" aria-selected="false" tabindex="-1">Inbox</button>
@@ -406,7 +406,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
   </figure>
   <figure class="panel" id="p-empty" role="tabpanel" aria-labelledby="t-empty">
     <img src="assets/board-nothing-to-do.png" width="1280" height="800" loading="lazy" alt="The console's Board view with no decisions waiting: the status reads Nothing to do.">
-    <figcaption><b>Nothing to do.</b> Shown only when the read is current and nothing is queued, blocked, active or waiting on you.</figcaption>
+    <figcaption><b>Nothing to do.</b> Shown only when the read is current and nothing is queued, blocked, active, or waiting on you.</figcaption>
   </figure>
   <figure class="panel" id="p-stale" role="tabpanel" aria-labelledby="t-stale">
     <img src="assets/board-stale.png" width="1280" height="800" loading="lazy" alt="The console's Board view after a failed read: a banner says the read failed and the older snapshot is shown, and the status reads Unknown.">
@@ -447,7 +447,7 @@ agentsys dispatch --task first-try --repo example-org/larkspur --class ci-repair
 https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/AGENT-SETUP.md
 Do the numbered steps in order and run only the commands the guide gives.
 Ask me for the operator email and for the runtimes I will use; do not choose them.
-Do not approve work, create grants, dispatch tasks or arm the loop. For each of
+Do not approve work, create grants, dispatch tasks, or arm the loop. For each of
 those, tell me what it needs and stop. End by reporting the result of every step.</pre>
       <button class="copy" type="button" data-copy="cmdAgent" aria-label="Copy the prompt for your coding agent">copy</button>
     </div>
@@ -528,7 +528,8 @@ those, tell me what it needs and stop. End by reporting the result of every step
         const on = t === tab;
         t.setAttribute('aria-selected', on);
         t.tabIndex = on ? 0 : -1;
-        d.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+        const panel = d.getElementById(t.getAttribute('aria-controls') ?? '');
+        if (panel) panel.hidden = !on;
       });
       if (focus) tab.focus();
     };
@@ -541,10 +542,10 @@ those, tell me what it needs and stop. End by reporting the result of every step
         if (e.key === 'End') { e.preventDefault(); show(tabs[tabs.length - 1], true); }
       });
     });
-    show(tabs[0]);
+    if (tabs.length > 0) show(tabs[0]);
   });
 
-  // Copy buttons.
+  // Copy buttons: the clipboard API first, then a hidden textarea for browsers that refuse it.
   const copyText = async (text) => {
     try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
     const ta = d.createElement('textarea');
@@ -558,7 +559,9 @@ those, tell me what it needs and stop. End by reporting the result of every step
   $$('.copy').forEach((btn) => {
     const label = btn.textContent;
     btn.addEventListener('click', async () => {
-      const ok = await copyText(d.getElementById(btn.dataset.copy).textContent);
+      const target = d.getElementById(btn.dataset.copy ?? '');
+      if (!target) return;
+      const ok = await copyText(target.textContent ?? '');
       btn.textContent = ok ? 'copied' : 'select and copy';
       btn.classList.add('hit');
       status.textContent = ok ? 'Copied to the clipboard.' : 'Could not copy. Select the text and copy it.';
