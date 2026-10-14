@@ -9,6 +9,7 @@ import {
 } from '../core/authority.js';
 import { FORBIDDEN_ACTIONS } from '../core/authorize.js';
 import { integrationBase, readFloor, writeFloor } from '../core/floor.js';
+import type { FloorSettings } from '../core/floor.js';
 import {
   formatUsd, getLedgerPolicy, listCalls, releaseCall, remainingUsd, reserveCall, setLedgerPolicy,
   settleCall,
@@ -155,7 +156,9 @@ const HELP = `agentsys — run approved coding-agent tasks and keep the evidence
   floor     [--show] | --repo <owner/name> --pr-base <branch> --as <operator>
             | --repo <owner/name> --clear-pr-base --as <operator>
             | --read-only-project <id> --as <operator> | --writable-project <id> --as <operator>
-            (limits no approval or grant can relax: a repo's required PR base, read-only cloud projects)
+            | --prompt-proposals <owner/name> --as <operator> | --clear-prompt-proposals --as <operator>
+            (limits no approval or grant can relax: a repo's required PR base, read-only cloud projects,
+             the one repository the improve stage may open prompt-change pull requests in)
   approve   --repo <r> --scope <text> --class <c> --runtime <rt> --profile <p>
             --actions <a,b> [--max-attempts N] [--max-concurrent N] [--max-paid-usd N]
             [--model m] [--effort e]   (the tier this work is approved to run at)
@@ -281,7 +284,7 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       }
       assertOperator(actingOperator(flags));
-      const next = { prBases: { ...current.prBases }, readOnlyProjects: [...current.readOnlyProjects] };
+      const next: FloorSettings = { ...current, prBases: { ...current.prBases }, readOnlyProjects: [...current.readOnlyProjects] };
       const repo = optionalString(flags, 'repo');
       const prBase = optionalString(flags, 'pr-base');
       if (prBase !== undefined || flag(flags, 'clear-pr-base')) {
@@ -293,6 +296,9 @@ async function main(argv: string[]): Promise<number> {
       if (readOnly && !next.readOnlyProjects.includes(readOnly)) next.readOnlyProjects.push(readOnly);
       const writable = optionalString(flags, 'writable-project');
       if (writable) next.readOnlyProjects = next.readOnlyProjects.filter((p) => p !== writable);
+      const proposals = optionalString(flags, 'prompt-proposals');
+      if (proposals !== undefined) next.promptProposals = proposals;
+      else if (flag(flags, 'clear-prompt-proposals')) delete next.promptProposals;
       writeFloor(next);
       console.log(JSON.stringify(readFloor(), null, 2));
       return 0;

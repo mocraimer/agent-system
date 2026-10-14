@@ -1,3 +1,4 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Scorecard } from '../../eval/scorecard.js';
 import { listScorecards } from '../../eval/scorecard.js';
@@ -27,7 +28,8 @@ import type { Item, PassContext, StagePlan } from '../types.js';
  * bounded change to it, measure the change against the frozen cases where it can
  * be measured, and propose it as a pull request. It never edits live
  * configuration: the change is a branch and a pull request, in the repository
- * that owns what it changes, for a person to merge or close.
+ * that owns what it changes, for a person to merge or close. A prompt change with
+ * no repository named for it in the floor stays a draft in the state directory.
  */
 
 /** What the improve stage reads besides the pass context. */
@@ -36,7 +38,7 @@ export interface ImproveDeps {
   snapshots?: SnapshotSource;
   /** The target repository's git, for a tier proposal against its base branch. */
   targetGit: ProposalGit;
-  /** The coordinator's own repository, for a prompt proposal. */
+  /** The coordinator's own repository, for a prompt proposal; absent, the draft is saved in the state directory. */
   coordinator?: { git: ProposalGit; store: Pick<Store, 'openPulls' | 'createPull' | 'updatePullBody'>; slug: string; base: string; path: string; commit: string };
   /** How the stage was started, said in the pull request body. */
   command: string;
@@ -290,7 +292,7 @@ export async function planImprove(ctx: PassContext, deps: ImproveDeps | undefine
   const kinds = [template ? `the ${template} prompt template (${promptTemplatePath(template)})` : undefined, tierRow ? `the ${tierRowsOf(pick.stage)} tier row` : undefined].filter(Boolean);
   const item: Item = {
     ref: `knob ${pick.key}`,
-    decision: { kind: 'dispatch', detail: `would draft one change to ${kinds.join(' or ')}, replay the frozen cases where the stage has them, and open one pull request on ${improveBranch(pick)}` },
+    decision: { kind: 'dispatch', detail: `would draft one change to ${kinds.join(' or ')}, replay the frozen cases where the stage has them, and open one pull request on ${improveBranch(pick)}${template && !deps?.coordinator ? ' (a prompt change is saved as a draft instead: no prompt proposal repository is named in the floor)' : ''}` },
   };
   if (!deps) {
     item.decision = { kind: 'blocked', reason: 'the improve stage has no git to propose through in this run' };
@@ -339,7 +341,15 @@ async function actOnKnob(ctx: PassContext, deps: ImproveDeps, row: KnobRow, temp
   const branch = improveBranch(row);
   let pr: { pr: number; opened: boolean; repo: string };
   if (draft.kind === 'prompt') {
-    if (!deps.coordinator) return { produced: false, summary: 'a prompt change is proposed in the coordinator repository, which this run was not given' };
+    if (!deps.coordinator) {
+      // Nothing leaves the machine: the operator reads the draft and decides where it goes.
+      const dir = join(ctx.stateDir, 'improve-drafts', branch.replaceAll('/', '-'));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'pull-request.md'), `# ${title}\n\n${body}\n`, 'utf8');
+      writeFileSync(join(dir, promptTemplatePath(template).split('/').pop()!), draft.template, 'utf8');
+      ctx.commands.recordLoop(taskId, { stage: 'improve', item: `knob ${row.key}`, workType: 'improve', wrote: dir });
+      return { produced: true, summary: `saved the draft to ${dir}; no prompt proposal repository is named in the floor` };
+    }
     const c = deps.coordinator;
     const r = await proposeFileChange({ git: c.git, store: c.store, worktree: worktreeDir(ctx, 'improve-coordinator') }, {
       base: c.base, branch, file: promptTemplatePath(template), edit: () => draft.template,

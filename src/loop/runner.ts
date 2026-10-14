@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { mayProposePromptsTo, readFloor } from '../core/floor.js';
 import { readJson, stateRoot, writeJson } from '../core/store.js';
 import { GitRepo } from './git.js';
 import { GhSnapshotSource } from '../console/snapshot.js';
@@ -87,9 +88,11 @@ async function notifyDeps(slug: string, print: (line: string) => void): Promise<
 /**
  * What the improve stage proposes through: the target's git for a tier, and the
  * coordinator's own checkout — the one this code runs from unless named — for a
- * prompt. A checkout that is not a GitHub clone leaves prompt proposals off.
+ * prompt. Prompt pull requests open only when the checkout's origin is the
+ * repository the floor names for them; otherwise, or when the checkout is not a
+ * GitHub clone, the stage saves its draft in the state directory instead.
  */
-async function improveDeps(repo: GitRepo, slug: string, coordinatorPath: string | undefined, print: (line: string) => void): Promise<ImproveDeps> {
+export async function improveDeps(repo: GitRepo, slug: string, coordinatorPath: string | undefined, print: (line: string) => void): Promise<ImproveDeps> {
   const path = resolve(coordinatorPath ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..'));
   const deps: ImproveDeps = {
     snapshots: new GhSnapshotSource(slug),
@@ -100,6 +103,10 @@ async function improveDeps(repo: GitRepo, slug: string, coordinatorPath: string 
   try {
     const git = new GitRepo(path);
     const coordinatorSlug = await git.slug();
+    if (!mayProposePromptsTo(coordinatorSlug)) {
+      print(`improve: prompt changes are saved as drafts, not proposed in ${coordinatorSlug}: the floor names ${readFloor().promptProposals ?? 'no repository'} for prompt proposals (agentsys floor --prompt-proposals <owner/name>)`);
+      return deps;
+    }
     deps.coordinator = { git, store: new GhStore(coordinatorSlug), slug: coordinatorSlug, base: 'main', path, commit: await git.revParse('HEAD') };
   } catch (err) {
     print(`improve: ${path} is not a GitHub checkout of the coordinator, so prompt changes cannot be proposed: ${err instanceof Error ? err.message : String(err)}`);
