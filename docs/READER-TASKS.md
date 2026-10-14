@@ -1,6 +1,6 @@
 # Reader tasks
 
-These are the tasks a reader comes to agent-system's documents to do. Each entry names the documents the task must be doable from, so a change to a document can be checked against the tasks that depend on it.
+These are the tasks a reader comes to the agent-system documents to do. Each entry names the documents the task must be doable from, so a change to a document can be checked against the tasks that depend on it.
 
 ## How a task is walked
 
@@ -19,7 +19,7 @@ A reader with fresh context walks one task at a time: no memory of this reposito
 ### T1 — Decide fit
 
 - **Reader:** A developer who landed on the repository and has not used the tool.
-- **Documents:** [README.md](../README.md#what-you-can-do)
+- **Documents:** [README.md](../README.md)
 - **Ends up able to:** Say what agent-system does, name three things they could do with it, and name two things it never does.
 - **Status:** unverified
 

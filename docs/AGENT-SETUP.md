@@ -6,20 +6,20 @@ You are not the operator. The operator is the person, and only the operator crea
 
 ## Who does what
 
-You do alone:
+You can do these alone:
 
 - Check tool versions, clone the repository, install, and build.
-- Run `init` with the email the person gave you, then `readiness`, `status` and one dispatch that is refused.
+- Run `init` with the email the person gave you, then `readiness`, `status`, and one dispatch that is refused.
 - Read output and report it.
 
-Only the person does:
+Only the person can do these:
 
 - Name the operator email. Do not make one up.
 - Choose which runtimes to use.
 - Sign in to a vendor tool, install a plugin inside a Claude Code session, create a Claude Code web session, or get a Codex cloud environment id.
 - Approve work, create a grant, run a dispatch that carries an approval or a grant, or arm the loop. If the person later gives you one exact command to run for any of these, you may run that command and nothing else.
 
-Never run `agentsys usage`. It prints a real account id. Run it only if the person asks, and never copy its output into a file, a commit, an issue or a message.
+Never run `agentsys usage`. It prints a real account id. Run it only if the person asks, and never copy its output into a file, a commit, an issue, or a message.
 
 ## Steps
 
@@ -90,14 +90,16 @@ Run `init` once. Running it again with another email replaces the operator witho
 agentsys readiness --runtime claude-local
 ```
 
-Run it once for each runtime the person named, replacing `claude-local` with that runtime's id. For each, you should see exit 0 and `<id>: ready`, or exit 1 and `<id>: NOT READY` followed by a `Setup incomplete:` line and a `Next:` line. `NOT READY` is a result to report, not a failure of your work. Copy the `Next:` line to the person, with the matching row from this table:
+Run it once for each runtime the person named, replacing `claude-local` with that runtime's id. For each, you should see exit 0 and `<id>: ready`, or exit 1 and `<id>: NOT READY` followed by a `Setup incomplete:` line and a `Next:` line. `NOT READY` is a result to report, not a failure of your work. For each runtime that is `NOT READY`, copy its `Next:` line to the person, with the matching row from this table:
 
 | Runtime | A common cause | Who acts |
 |---|---|---|
-| `claude-local` | `claude` is not on `PATH`, or `claude auth status` shows no signed-in account | The person installs Claude Code or signs in. `readiness` does not check the manifest-dev plugins; the person installs them inside a Claude Code session, as the [README](../README.md#what-each-runtime-needs) shows. |
+| `claude-local` | `claude` is not on `PATH`, or `claude auth status` shows no signed-in account | The person installs Claude Code or signs in. |
 | `pi-local` | Pi has no manifest-dev `auto` skill: run `pi install git:github.com/doodledood/manifest-dev`, then check again | You may run that command if the person agrees. The person signs Pi in to a provider. |
 | `codex-cloud` | No environment id is configured, or Codex rejects the stored login | The person picks an environment (`codex cloud` lists them) and signs in with `codex login`. You may then record the id with `agentsys config --codex-env <ENV_ID>`. The skill check (`agentsys config --codex-skill-verified`) is the person's call. |
 | `claude-web` | No cloud session is configured | The person creates a session with `claude --cloud "<description>"` in a terminal. You may then record its id with `agentsys config --claude-cloud-session <id>`. |
+
+`readiness` for `claude-local` checks only that `claude` runs and is signed in. Whatever it prints for `claude-local`, tell the person that the manifest-dev plugins must be installed inside a Claude Code session, as [What each runtime needs](../README.md#what-each-runtime-needs) in the README shows.
 
 ### 8. See the refusal
 
@@ -108,9 +110,9 @@ agentsys dispatch --task first-try --repo example-org/larkspur --class ci-repair
   --prompt "should not run"
 ```
 
-You should see exit 1 and `Awaiting approval (task first-try): No approval was supplied and there are no grants.` This shows that the install holds: nothing runs without the operator. No agent ran.
+You should see exit 1 and `Awaiting approval (task first-try): No approval was supplied and there are no grants.` This shows that the install holds: nothing runs without the operator. No agent ran. If your tool refuses to run this command, skip it, tell the person that your tool refused it, and go on to step 9. The step only shows the refusal; nothing later depends on it.
 
-The `Next:` line under it suggests `approve --task first-try`. `approve` has no `--task` flag, and that form fails. The full command takes `--repo`, `--scope`, `--class`, `--runtime`, `--profile`, `--actions` and `--as`, and it is the operator's to run. See [Approving one task](OPERATING.md#approving-one-task).
+The `Next:` line under it suggests `approve --task first-try`. `approve` takes no `--task` flag, and that form fails because its required flags are missing. The full command takes `--repo`, `--scope`, `--class`, `--runtime`, `--profile`, `--actions`, and `--as`, and it is the operator's to run. See [Approving one task](OPERATING.md#approving-one-task).
 
 ### 9. Check the state and report
 
@@ -118,7 +120,7 @@ The `Next:` line under it suggests `approve --task first-try`. `approve` has no 
 agentsys status
 ```
 
-You should see `No runs recorded.` Then tell the person:
+You should see `No runs recorded.` Then tell the person the following:
 
 - the checkout path, and whether `agentsys` is on the `PATH` or you use `node dist/cli/main.js`;
 - the directory that holds `.state/`;

@@ -12,9 +12,9 @@ agent-system is a command-line coordinator. You, the *operator*, approve work. I
 |---|---|---|
 | Run one approved task on the runtime you choose | `agentsys approve`, then `agentsys dispatch` | [Approving one task](docs/OPERATING.md#approving-one-task) |
 | Repair CI failures: a failed CI run becomes a job, and a standing grant lets matching repairs start without a new approval each time | `agentsys intake --event failure.json` | [Feeding events in](docs/OPERATING.md#feeding-events-in) |
-| Work a repository's tickets with the ticket loop: shape tickets, open pull requests for the ones you grant, review and fix them, open a release pull request, verify the release | `agentsys loop arm --repo <path>` | [Ticket loop example](examples/ticket-loop/README.md), [The ticket loop](docs/OPERATING.md#the-ticket-loop) |
+| Work a repository's tickets with the ticket loop: shape tickets, open pull requests for the ones you grant, review and fix them, open a release pull request, and verify the release | `agentsys loop arm --repo <path>` | [Ticket loop example](examples/ticket-loop/README.md), [The ticket loop](docs/OPERATING.md#the-ticket-loop) |
 | Watch and steer in a local console in your browser, or print the same board in a terminal | `agentsys ui --repo <path>` | [Local control UI](docs/CONTROL-UI.md) |
-| Connect a local agent to a stdio MCP server that reads status, jobs, usage, readiness and evidence, and can dispatch inside authority you already gave | `agentsys-mcp` | [Local MCP server](docs/MCP.md) |
+| Connect a local agent to a stdio MCP server that reads status, jobs, usage, readiness, evaluation, and evidence, and can dispatch inside authority you already gave | `agentsys-mcp` | [Local MCP server](docs/MCP.md) |
 | Keep evidence for every run, count outcomes, and replay frozen cases to compare configurations | `agentsys scorecards` | [Evidence and evaluation](docs/OPERATING.md#evidence-and-evaluation) |
 | Hold work to your subscription's allowance and to a limit on paid provider calls | `agentsys usage`, `agentsys ledger` | [Subscription admission](docs/OPERATING.md#subscription-admission) |
 
@@ -22,7 +22,7 @@ agent-system is a command-line coordinator. You, the *operator*, approve work. I
 
 - It never merges into `main`, turns on auto-merge, force-pushes, pushes to a base branch, runs a release, or deploys to production. It refuses these before it checks authority, so a grant written too broadly cannot reach them.
 - It runs nothing on a fresh install. With no approval and no grant, every dispatch is held.
-- It treats text that an agent or a forge wrote as data, never as an instruction. Only the operator creates or changes authority.
+- It treats text that an agent or a code host such as GitHub wrote as data, never as an instruction. Only the operator creates or changes authority.
 - One narrow merge exists and is off by default. The ticket loop can merge a pull request into `dev` only when the ticket's stop-line (how far the loop may take that kind of work) reaches the `dev` rung (5 in the example policy), an independent review of the current head is clean or has findings you accepted, `check-pr` reports the pull request ready, and you have granted `merge-dev`. A fresh install has no grants.
 
 ## How a run is checked
@@ -44,19 +44,21 @@ request ──► authority ──► admission ──► runtime ──► evid
 You need:
 
 - Node.js 22.12 or newer.
-- At least one runtime from the table below, signed in.
-- For the ticket loop: `gh` logged in as an account that can comment, label and open pull requests in the target repository.
+- At least one runtime, signed in. [What each runtime needs](#what-each-runtime-needs) lists the requirements.
+- For the ticket loop: `gh` logged in as an account that can comment, label, and open pull requests in the target repository.
 
 ### What each runtime needs
+
+Each runtime has its own setup, listed here by runtime id.
 
 | Runtime id | Runs on | Needs |
 |---|---|---|
 | `claude-local` | Your machine | `claude` on `PATH` and signed in (`claude auth status`), with the manifest-dev plugins installed |
 | `pi-local` | Your machine | `pi` on `PATH` and signed in to a provider, with the manifest-dev package installed for Pi |
-| `codex-cloud` | Codex cloud | An environment id recorded with `agentsys config --codex-env <id>`, a working `codex login`, and a confirmed skill check (below) |
+| `codex-cloud` | Codex cloud | An environment id recorded with `agentsys config --codex-env <id>`, a working `codex login`, and `agentsys config --codex-skill-verified` once its environment loads the skill |
 | `claude-web` | Claude Code web | An existing cloud session, recorded with `agentsys config --claude-cloud-session <id>` |
 
-Every runtime sends a task through the manifest-dev `auto` skill unless you pass `--entry prompt`, which sends the prompt as written. Install the manifest-dev plugins for each runtime you use:
+Every runtime sends a task through the manifest-dev `auto` skill unless you pass `--entry prompt`, which sends the prompt as written. The ticket loop also starts the manifest-dev skills `run-ticket`, `define`, `review-pr`, and `check-pr`. Install the manifest-dev plugins for each runtime you use:
 
 ```bash
 # Claude Code, inside a session
@@ -92,7 +94,7 @@ agentsys dispatch --task first-try --repo example-org/larkspur --class ci-repair
 
 `npm install -g .` puts `agentsys` and `agentsys-mcp` on your `PATH`. If it fails with a permissions error, skip it and write `node dist/cli/main.js` wherever this guide says `agentsys`.
 
-What you should see:
+Each command should give this result:
 
 - `init` exits 0 and prints `Operator set to you@example.com. No autonomy grants are active.`
 - `readiness --runtime claude-local` exits 0 and prints `claude-local: ready`, or exits 1 and prints `claude-local: NOT READY` with what is missing. Swap in the runtime you will use. Without `--runtime` it checks all four and exits 1 while any is not set up.
@@ -109,7 +111,7 @@ Set up agent-system by following
 https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/AGENT-SETUP.md
 Do the numbered steps in order and run only the commands the guide gives.
 Ask me for the operator email and for the runtimes I will use; do not choose them.
-Do not approve work, create grants, dispatch tasks or arm the loop. For each of
+Do not approve work, create grants, dispatch tasks, or arm the loop. For each of
 those, tell me what it needs and stop. End by reporting the result of every step.
 ```
 
