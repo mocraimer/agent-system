@@ -573,7 +573,7 @@ the result of every step.</pre>
       btn.textContent = ok ? 'copied' : 'select and copy';
       btn.classList.add('hit');
       if (status) status.textContent = ok ? 'Copied to the clipboard.' : 'Could not copy. Select the text and copy it.';
-      setTimeout(() => { btn.textContent = label; btn.classList.remove('hit'); }, 1400);
+      setTimeout(() => { btn.textContent = label; btn.classList.remove('hit'); if (status) status.textContent = ''; }, 1400);
     });
   });
 })();

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import type { Browser, BrowserContext, Page } from '@playwright/test';
+import type { Browser, BrowserContext, Locator, Page } from '@playwright/test';
 import { createServer, type Server } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
@@ -31,7 +31,7 @@ let base = '';
 test.beforeAll(async () => {
   server = createServer((req, res) => {
     const path = normalize(decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname));
-    const file = join(SITE, path === '/' || path === '\\' ? 'index.html' : path);
+    const file = join(SITE, path === '/' ? 'index.html' : path);
     if (relative(SITE, file).startsWith('..') || !existsSync(file) || !statSync(file).isFile()) { res.writeHead(404).end(); return; }
     res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' }).end(readFileSync(file));
   });
@@ -51,7 +51,14 @@ async function offlineFonts(context: BrowserContext): Promise<void> {
 
 interface Opened { page: Page; context: BrowserContext; problems: string[] }
 
-/** Open the page in a fresh context, run the test body, and close the context even when the body throws. */
+/** An attribute that must be there: a missing one would make a `#` selector that matches every element with an id. */
+async function attr(locator: Locator, name: string): Promise<string> {
+  const value = await locator.getAttribute(name);
+  expect(value, `${name} is missing`).toBeTruthy();
+  return value!;
+}
+
+/** Open the page in a fresh context, run the test body, check that the page raised no error, and close the context even when the body throws. */
 async function withPage(browser: Browser, options: Parameters<Browser['newContext']>[0], body: (opened: Opened) => Promise<void>): Promise<void> {
   const context = await browser.newContext(options);
   try {
@@ -63,6 +70,7 @@ async function withPage(browser: Browser, options: Parameters<Browser['newContex
     page.on('requestfailed', (r) => problems.push(`request failed: ${r.url()}`));
     await page.goto(base);
     await body({ page, context, problems });
+    expect(problems, 'console errors, page errors or failed requests').toEqual([]);
   } finally {
     await context.close();
   }
@@ -70,36 +78,34 @@ async function withPage(browser: Browser, options: Parameters<Browser['newContex
 
 for (const [width, height] of [[1280, 800], [375, 812]] as const) {
   test(`at ${width} by ${height}: no errors, every image loads, no sideways scroll`, async ({ browser }) => {
-    await withPage(browser, { viewport: { width, height } }, async ({ page, problems }) => {
+    await withPage(browser, { viewport: { width, height } }, async ({ page }) => {
       // Three of the four screenshots sit in tabs that stay hidden until chosen, so open each tab.
       for (const tab of await page.locator('#consoleTabs [role=tab]').all()) {
         await tab.click();
-        const img = page.locator(`#${(await tab.getAttribute('aria-controls')) ?? ''} img`);
+        const img = page.locator(`#${await attr(tab, 'aria-controls')} img`);
         await img.scrollIntoViewIfNeeded();
         await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0), { message: 'screenshot loaded' }).toBe(true);
       }
       const overflow = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       expect(overflow.scroll).toBeLessThanOrEqual(overflow.client);
-      expect(problems).toEqual([]);
     });
   });
 }
 
 test('each copy button puts exactly its command text on the clipboard and shows it was copied', async ({ browser }) => {
-  await withPage(browser, { viewport: { width: 1280, height: 800 } }, async ({ page, context, problems }) => {
+  await withPage(browser, { viewport: { width: 1280, height: 800 } }, async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
     expect(await page.locator('.copy').count()).toBe(2);
     for (const tab of ['#t-you', '#t-agent']) {
       await page.locator(tab).click();
-      const panel = page.locator(`#${(await page.locator(tab).getAttribute('aria-controls')) ?? ''}`);
+      const panel = page.locator(`#${await attr(page.locator(tab), 'aria-controls')}`);
       const button = panel.locator('.copy');
-      const expected = await page.locator(`#${(await button.getAttribute('data-copy')) ?? ''}`).evaluate((el) => el.textContent ?? '');
+      const expected = await page.locator(`#${await attr(button, 'data-copy')}`).evaluate((el) => el.textContent ?? '');
       await button.click();
       await expect(button).toHaveText('copied');
       expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
       await expect(button).toHaveText('copy');
     }
-    expect(problems).toEqual([]);
   });
 });
 

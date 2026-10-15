@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
-import { escapeRe, headingSlugs } from './docs-testkit.js';
+import { commandLines, escapeRe, fencedBlocks, headingSlugs, sectionOf, shellLines } from './docs-testkit.js';
 
 // dist/cli -> dist -> repo root
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -76,15 +76,15 @@ function loadProblems(page: string): string[] {
 /** One problem per link into this repository whose file or heading does not exist. */
 function repoLinkProblems(text: string): string[] {
   const problems: string[] = [];
-  const check = (path: string, anchor: string | undefined, link: string): void => {
+  const check = (path: string, anchor: string | undefined, link: string, directory = false): void => {
     const file = join(repoRoot, path);
-    if (!existsSync(file)) { problems.push(`${link}\n    no such file: ${path}`); return; }
+    if (!existsSync(file) || statSync(file).isDirectory() !== directory) { problems.push(`${link}\n    no such ${directory ? 'directory' : 'file'}: ${path}`); return; }
     // GitHub gives the rendered README the id "readme"; it is not a heading.
     if (anchor === 'readme' && path === 'README.md') return;
     if (anchor && file.endsWith('.md') && !headingSlugs(read(file)).has(anchor)) problems.push(`${link}\n    no heading "${anchor}" in ${path}`);
   };
-  for (const m of text.matchAll(/https:\/\/github\.com\/mocraimer\/agent-system(?:\/(?:blob|tree)\/main\/([^"'#)\s]+))?(?:#([\p{L}\p{N}_-]+))?/gu)) {
-    check(m[1] ?? 'README.md', m[2], m[0]);
+  for (const m of text.matchAll(/https:\/\/github\.com\/mocraimer\/agent-system(?:\/(blob|tree)\/main\/([^"'#)\s]+))?(?:#([\p{L}\p{N}_-]+))?/gu)) {
+    check(m[2] ?? 'README.md', m[3], m[0], m[1] === 'tree');
   }
   for (const m of text.matchAll(/https:\/\/raw\.githubusercontent\.com\/mocraimer\/agent-system\/main\/([^"'#)\s]+)/g)) check(m[1]!, undefined, m[0]);
   return problems;
@@ -175,27 +175,27 @@ describe('the page says what the README says', () => {
   const readme = read(join(repoRoot, 'README.md'));
 
   it('copies the README quick start exactly, as text in the HTML', () => {
-    const block = /## Quick start\n\n```bash\n([\s\S]*?)\n```/.exec(readme)?.[1];
-    assert.ok(block, 'README has no quick-start block');
+    const quickStart = sectionOf(readme, /^Quick start$/i);
+    assert.ok(quickStart, 'README has no "Quick start" section');
+    const block = fencedBlocks(quickStart)[0]?.join('\n');
+    assert.ok(block, 'README quick start has no fenced block');
     assert.equal(textOfId(html(), 'cmdYou'), block);
   });
 
   it("copies the README's paste-ready prompt exactly, as text in the HTML", () => {
-    const block = /## Set it up with a coding agent[\s\S]*?```text\n([\s\S]*?)\n```/.exec(readme)?.[1];
-    assert.ok(block, 'README has no paste-ready prompt');
+    const section = sectionOf(readme, /coding agent/i);
+    assert.ok(section, 'README has no section about a coding agent');
+    const block = fencedBlocks(section).find((b) => b.join('\n').includes('docs/AGENT-SETUP.md'))?.join('\n');
+    assert.ok(block, 'README has no paste-ready prompt that names docs/AGENT-SETUP.md');
     assert.equal(textOfId(html(), 'cmdAgent'), block);
   });
 
   it('shows only commands that the README or the agent guide shows', () => {
     const known = new Set<string>();
-    const collect = (md: string): void => {
-      for (const m of md.matchAll(/`((?:agentsys|node dist\/cli\/main\.js)[^`]*)`/g)) known.add(m[1]!.trim());
-      for (const block of md.matchAll(/```[a-z]*\n([\s\S]*?)\n```/g)) {
-        for (const line of block[1]!.replace(/\\\n\s*/g, ' ').split('\n')) known.add(line.replace(/\s+#\s.*$/, '').replace(/\s+/g, ' ').trim());
-      }
-    };
-    collect(readme);
-    collect(read(join(repoRoot, 'docs', 'AGENT-SETUP.md')));
+    for (const md of [readme, read(join(repoRoot, 'docs', 'AGENT-SETUP.md'))]) {
+      for (const line of [...commandLines(md), ...shellLines(md)]) known.add(line.replace(/\s+/g, ' ').trim());
+      for (const span of md.matchAll(/`([^`]+)`/g)) known.add(span[1]!.trim());
+    }
     const page = html();
     const shown = [
       ...[...page.matchAll(/<span class="ln c">([\s\S]*?)<\/span>/g)].map((m) => decode(m[1]!)),

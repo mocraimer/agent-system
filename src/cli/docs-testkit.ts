@@ -55,14 +55,15 @@ export function proseOf(md: string): string {
     .join('\n');
 }
 
-/** The line without a trailing shell comment: a `#` that follows whitespace, outside any quotes. */
+/** The line without a trailing shell comment: a `#` that starts a word, outside any quotes. */
 export function withoutComment(line: string): string {
   let quote = '';
   for (let i = 0; i < line.length; i++) {
     const c = line[i]!;
+    if (c === '\\' && quote !== "'") { i++; continue; }
     if (quote) { if (c === quote) quote = ''; continue; }
     if (c === '"' || c === "'") quote = c;
-    else if (c === '#' && i > 0 && /\s/.test(line[i - 1]!) && (i + 1 === line.length || /\s/.test(line[i + 1]!))) return line.slice(0, i).trimEnd();
+    else if (c === '#' && i > 0 && /\s/.test(line[i - 1]!)) return line.slice(0, i).trimEnd();
   }
   return line.trim();
 }

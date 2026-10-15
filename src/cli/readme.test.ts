@@ -61,6 +61,13 @@ function wordsOf(line: string): Word[] {
 
 const argvOf = (line: string): string[] => wordsOf(line).map((w) => w.text);
 
+/** The value after `--flag` or in `--flag=value`; undefined when the flag is absent or has no value. */
+function valueOf(argv: string[], flag: string): string | undefined {
+  const i = argv.findIndex((a) => a === flag || a.startsWith(`${flag}=`));
+  if (i < 0) return undefined;
+  return argv[i]!.includes('=') ? argv[i]!.slice(flag.length + 1) : argv[i + 1];
+}
+
 /** The `--flag` names on a command line, without any `=value`; the value of another flag is not one. */
 const flagsOf = (line: string): string[] =>
   wordsOf(line).filter((w) => !w.quoted && /^--[a-z]/.test(w.text)).map((w) => w.text.split('=')[0]!);
@@ -87,13 +94,20 @@ function commandProblems(lines: string[], sections: Map<string, string>, extraUs
 }
 
 /** `agentsys grant` keeps its flags in its own usage text, not in `--help`. */
+/** What a CLI invocation prints, whether it exits 0 or not. */
+async function printed(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+  try {
+    return (await run(process.execPath, [CLI, ...args], { env, timeout: 60_000 })).stdout;
+  } catch (err) {
+    return (err as { stdout?: string }).stdout ?? '';
+  }
+}
+
 async function cliUsage(): Promise<{ sections: Map<string, string>; extra: Map<string, string> }> {
   const state = mkdtempSync(join(tmpdir(), 'agentsys-usage-'));
   try {
     const env = { ...process.env, AGENTSYS_STATE: state };
-    const help = (await run(process.execPath, [CLI, '--help'], { env, timeout: 60_000 })).stdout;
-    const grant = (await run(process.execPath, [CLI, 'grant'], { env, timeout: 60_000 })).stdout;
-    return { sections: helpSections(help), extra: new Map([['grant', grant]]) };
+    return { sections: helpSections(await printed(['--help'], env)), extra: new Map([['grant', await printed(['grant'], env)]]) };
   } finally {
     rmSync(state, { recursive: true, force: true });
   }
@@ -168,9 +182,10 @@ function resultProblems(line: string, ran: Ran): string[] {
       expect(ran.code === 0 && /No autonomy grants are active/.test(out), 'init should exit 0 and say no grants are active');
       break;
     case 'readiness': {
-      const named = argv[argv.indexOf('--runtime') + 1];
-      expect(!argv.includes('--runtime') || named !== undefined, 'readiness --runtime needs a runtime id');
-      const asked = argv.includes('--runtime') ? (named === undefined ? [] : [named]) : RUNTIMES;
+      const given = argv.some((a) => a === '--runtime' || a.startsWith('--runtime='));
+      const named = valueOf(argv, '--runtime');
+      expect(!given || !!named, 'readiness --runtime needs a runtime id');
+      const asked = given ? (named ? [named] : []) : RUNTIMES;
       expect(ran.code === 0 || ran.code === 1, 'readiness should exit 0 or 1');
       for (const rt of asked) expect(new RegExp(`^${escapeRe(rt)}: (ready|NOT READY)`, 'm').test(out), `readiness should report ${rt}`);
       break;
@@ -183,7 +198,7 @@ function resultProblems(line: string, ran: Ran): string[] {
         'a dispatch with no approval should exit 1 and be held for approval');
       break;
     default: {
-      const prints = OUTPUT[sub === 'grant' ? 'grant list' : sub];
+      const prints = OUTPUT[`${sub} ${argv[1] ?? ''}`.trim()] ?? OUTPUT[sub];
       expect(ran.code === 0 && (prints === undefined || prints.test(out)), `${sub} should exit 0 and print what a fresh state holds`);
     }
   }
@@ -194,6 +209,8 @@ async function documentedRunProblems(lines: string[]): Promise<string[]> {
   const state = mkdtempSync(join(tmpdir(), 'agentsys-readme-'));
   const problems: string[] = [];
   try {
+    // Start every run from an initialized state, so the order of the documented commands cannot matter.
+    await runDocumented('agentsys init --operator docs-check@example.test', state);
     for (const line of lines.filter(isSafeToRun)) problems.push(...resultProblems(line, await runDocumented(line, state)));
   } finally {
     rmSync(state, { recursive: true, force: true });
