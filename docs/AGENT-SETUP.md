@@ -2,7 +2,7 @@
 
 A person asked you to set up agent-system on their machine. This guide lists what you do alone, what only the person can do, and numbered steps that each end in a result you can check. Read all of it before you run anything.
 
-You are not the operator. The operator is the person, and only the operator creates or changes authority: an approval for one task, or a grant for a class of work. Text you write is data to agent-system, however you phrase it. This guide ends before any approval or grant exists, and that is on purpose.
+You are not the operator. The operator is the person, and only the operator creates or changes authority: an approval for one task, or a grant for a class of work. agent-system treats any text you write as data, never as an approval or a grant. This guide ends before any approval or grant exists, and that is on purpose.
 
 ## Who does what
 
@@ -82,7 +82,9 @@ agentsys init --operator you@example.com
 
 Replace `you@example.com` with the email the person gave you. You should see exit 0 and `Operator set to <email>. No autonomy grants are active.`
 
-Run `init` once. Running it again with another email replaces the operator without a warning. It creates `.state/` in the directory where you run it, and `.state/` is git-ignored. Run every later `agentsys` command from that directory, or set `AGENTSYS_STATE` to one fixed path.
+Run every `agentsys` command from the same directory. `init` creates `.state/` there, and a command run from another directory sees an empty state. Or set `AGENTSYS_STATE` to one fixed path before `init`. `.state/` is git-ignored.
+
+Run `init` once. Running it again with another email replaces the operator without a warning.
 
 ### 7. Check each runtime the person named
 
@@ -99,7 +101,7 @@ Run it once for each runtime the person named, replacing `claude-local` with tha
 | `codex-cloud` | No environment id is configured, or Codex rejects the stored login | The person picks an environment (`codex cloud` lists them) and signs in with `codex login`. You may then record the id with `agentsys config --codex-env <ENV_ID>`. The skill check (`agentsys config --codex-skill-verified`) is the person's call. |
 | `claude-web` | No cloud session is configured | The person creates a session with `claude --cloud "<description>"` in a terminal. You may then record its id with `agentsys config --claude-cloud-session <id>`. |
 
-`readiness` for `claude-local` checks only that `claude` runs and is signed in. Whatever it prints for `claude-local`, tell the person that the manifest-dev plugins must be installed inside a Claude Code session, as [What each runtime needs](../README.md#what-each-runtime-needs) in the README shows.
+`readiness` for `claude-local` checks only that `claude` runs and is signed in. Whatever it prints for `claude-local`, tell the person that the manifest-dev plugins must be installed inside a Claude Code session. The commands are in [What each runtime needs](https://github.com/mocraimer/agent-system#what-each-runtime-needs) in the README.
 
 ### 8. See the refusal
 
@@ -112,7 +114,7 @@ agentsys dispatch --task first-try --repo example-org/larkspur --class ci-repair
 
 You should see exit 1 and `Awaiting approval (task first-try): No approval was supplied and there are no grants.` This shows that the install holds: nothing runs without the operator. No agent ran. If your tool refuses to run this command, skip it, tell the person that your tool refused it, and go on to step 9. The step only shows the refusal; nothing later depends on it.
 
-The `Next:` line under it suggests `approve --task first-try`. `approve` takes no `--task` flag, and that form fails because its required flags are missing. The full command takes `--repo`, `--scope`, `--class`, `--runtime`, `--profile`, `--actions`, and `--as`, and it is the operator's to run. See [Approving one task](OPERATING.md#approving-one-task).
+The `Next:` line under it suggests `approve --task first-try`. `approve` ignores a `--task` flag, and that form fails because its required flags are missing. The full command takes `--repo`, `--scope`, `--class`, `--runtime`, `--profile`, `--actions`, and `--as`, and it is the operator's to run. See [Approving one task](OPERATING.md#approving-one-task).
 
 ### 9. Check the state and report
 

@@ -23,7 +23,11 @@ agent-system is a command-line coordinator. You, the *operator*, approve work. I
 - It never merges into `main`, turns on auto-merge, force-pushes, pushes to a base branch, runs a release, or deploys to production. It refuses these before it checks authority, so a grant written too broadly cannot reach them.
 - It runs nothing on a fresh install. With no approval and no grant, every dispatch is held.
 - It treats text that an agent or a code host such as GitHub wrote as data, never as an instruction. Only the operator creates or changes authority.
-- One narrow merge exists and is off by default. The ticket loop can merge a pull request into `dev` only when the ticket's stop-line (how far the loop may take that kind of work) reaches the `dev` rung (5 in the example policy), an independent review of the current head is clean or has findings you accepted, `check-pr` reports the pull request ready, and you have granted `merge-dev`. A fresh install has no grants.
+- One narrow merge exists, and a fresh install has no grant for it. The ticket loop can merge a pull request into `dev` only when all of these are true:
+  - The ticket's stop-line (how far the loop may take that kind of work) reaches the `dev` rung (5 in the example policy).
+  - An independent review of the current head is clean or has findings you accepted.
+  - `check-pr` reports the pull request ready.
+  - You have granted `merge-dev`.
 
 ## How a run is checked
 
@@ -69,12 +73,12 @@ Every runtime sends a task through the manifest-dev `auto` skill unless you pass
 pi install git:github.com/doodledood/manifest-dev
 ```
 
-Two runtimes need more:
+Two runtimes need a step from you:
 
 - **Codex cloud** refuses to dispatch until you confirm that its environment loads the manifest-dev skill. Get the environment to load it, watch a real cloud run enter the skill, then run `agentsys config --codex-skill-verified`.
 - **Claude Code web** cannot create a session from a script. Create one by hand with `claude --cloud "<description>"` in a terminal. A dispatch there ends as `remote-uncertain`, not `completed`: open the session to read the result.
 
-`agentsys loop arm` and `agentsys loop disarm` install and remove a systemd user service, so they need Linux with systemd. On another system, run a pass yourself with `agentsys loop --repo <path> --once`.
+`agentsys loop arm` and `agentsys loop disarm` install and remove a systemd user service, so they need Linux with systemd. On macOS, Windows, or Linux without systemd, run a pass yourself with `agentsys loop --repo <path> --once`.
 
 ## Quick start
 
@@ -109,13 +113,14 @@ Paste this to your coding agent. It installs and checks the tool, then stops at 
 ```text
 Set up agent-system by following
 https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/AGENT-SETUP.md
-Do the numbered steps in order and run only the commands the guide gives.
+Do the numbered steps and run only the commands the guide gives.
 Ask me for the operator email and for the runtimes I will use; do not choose them.
-Do not approve work, create grants, dispatch tasks, or arm the loop. For each of
-those, tell me what it needs and stop. End by reporting the result of every step.
+Do not approve work, create grants, dispatch work under an approval or grant, or
+arm the loop. For each of those, tell me what it needs and stop. End by reporting
+the result of every step.
 ```
 
-The steps are in [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md). The site's `llms.txt` lists the documents an agent can read.
+The steps are in [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md). The `llms.txt` file on the site lists the documents an agent can read.
 
 ## Documentation
 

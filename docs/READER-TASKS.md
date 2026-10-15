@@ -32,9 +32,9 @@ A reader with fresh context walks one task at a time: no memory of this reposito
 
 ### T3 — Agent setup
 
-- **Reader:** A coding agent that a person has told to set the tool up, with the README's paste-ready prompt as its only instruction.
+- **Reader:** A coding agent that a person has told to set the tool up, with the paste-ready prompt from the README as its only instruction.
 - **Documents:** [README.md](../README.md#set-it-up-with-a-coding-agent), [docs/AGENT-SETUP.md](AGENT-SETUP.md)
-- **Ends up able to:** Complete setup to the runbook's checkpoint, report readiness per runtime, and stop at every step only the person can do.
+- **Ends up able to:** Complete setup to the checkpoint in the runbook, report readiness per runtime, and stop at every step only the person can do.
 - **Status:** unverified
 
 ### T4 — Pick a first job
