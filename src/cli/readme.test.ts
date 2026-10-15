@@ -93,7 +93,6 @@ function commandProblems(lines: string[], sections: Map<string, string>, extraUs
   return problems;
 }
 
-/** `agentsys grant` keeps its flags in its own usage text, not in `--help`. */
 /** What a CLI invocation prints, whether it exits 0 or not. */
 async function printed(args: string[], env: NodeJS.ProcessEnv): Promise<string> {
   try {
@@ -103,6 +102,7 @@ async function printed(args: string[], env: NodeJS.ProcessEnv): Promise<string> 
   }
 }
 
+/** `agentsys grant` keeps its flags in its own usage text, not in `--help`. */
 async function cliUsage(): Promise<{ sections: Map<string, string>; extra: Map<string, string> }> {
   const state = mkdtempSync(join(tmpdir(), 'agentsys-usage-'));
   try {

@@ -199,6 +199,7 @@ test('the first screen at 1200 by 630 is written for the link preview', async ({
       throw new Error(`the hero terminal did not finish typing; page errors: ${errors.join('; ') || 'none'}`, { cause: err });
     });
     await page.waitForTimeout(400);
+    expect(errors, 'page errors while the first screen loaded').toEqual([]);
     mkdirSync(join(process.cwd(), 'test-results'), { recursive: true });
     const shot = await page.screenshot({ path: join(process.cwd(), 'test-results', 'site-og.png') });
     expect(shot.readUInt32BE(16)).toBe(1200);
