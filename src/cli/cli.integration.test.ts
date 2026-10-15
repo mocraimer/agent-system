@@ -482,7 +482,7 @@ describe('settings and admission through the real CLI', () => {
     await agentsys('init', '--operator', OP);
     const reserved = await agentsys(
       'ledger', 'reserve', '--task', 't-stt', '--run', 'run_stt', '--operation', 'openai:embeddings',
-      '--bound-usd', '0.10', '--basis', '2:20 of audio at listed rate plus one retry',
+      '--bound-usd', '0.10', '--basis', '40 article summaries at listed rate plus one retry',
     );
     assert.equal(reserved.code, 0);
     assert.match(reserved.stdout, /Reserved \$0\.10/);
@@ -515,7 +515,7 @@ describe('settings and admission through the real CLI', () => {
     await agentsys('init', '--operator', OP);
     const reserved = await agentsys(
       'ledger', 'reserve', '--task', 't-unk', '--run', 'run_unk', '--operation', 'openai:embeddings',
-      '--bound-usd', '0.10', '--basis', 'bounded audio',
+      '--bound-usd', '0.10', '--basis', 'bounded summaries',
     );
     const id = /\b(call_[a-z0-9]+)\b/.exec(reserved.stdout)?.[1];
     assert.ok(id);
@@ -535,7 +535,7 @@ describe('settings and admission through the real CLI', () => {
     await agentsys('init', '--operator', OP);
     const reserved = await agentsys(
       'ledger', 'reserve', '--task', 't-rel', '--run', 'run_rel', '--operation', 'openai:embeddings',
-      '--bound-usd', '0.10', '--basis', 'bounded audio',
+      '--bound-usd', '0.10', '--basis', 'bounded summaries',
     );
     const id = /\b(call_[a-z0-9]+)\b/.exec(reserved.stdout)?.[1];
     assert.ok(id);
@@ -546,7 +546,7 @@ describe('settings and admission through the real CLI', () => {
 
     const second = await agentsys(
       'ledger', 'reserve', '--task', 't-rel2', '--run', 'run_rel2', '--operation', 'openai:embeddings',
-      '--bound-usd', '0.10', '--basis', 'bounded audio',
+      '--bound-usd', '0.10', '--basis', 'bounded summaries',
     );
     const id2 = /\b(call_[a-z0-9]+)\b/.exec(second.stdout)?.[1];
     assert.ok(id2);
@@ -726,7 +726,7 @@ describe('status', () => {
 });
 
 /**
- * The operator deferred live Premiere verification for this phase.
+ * The operator deferred live extension verification for this phase.
  *
  * These drive the real command line end to end. The candidate, check list and
  * evidence are LABELLED DETERMINISTIC FIXTURES — test data written by this file, not
@@ -748,7 +748,7 @@ describe('deferred scope through the real configuration and acceptance surfaces'
     await agentsys('init', '--operator', OP);
     writeFileSync(join(state, 'required-checks.json'), JSON.stringify([
       { name: 'web-journey', requiredClass: 'real-provider' },
-      { name: 'premiere-native-journey', requiredClass: 'native' },
+      { name: 'extension-native-journey', requiredClass: 'native' },
     ]));
   }
   const writeEvidence = (evidence: unknown[]): string => {
@@ -759,16 +759,16 @@ describe('deferred scope through the real configuration and acceptance surfaces'
 
   it('lists a deferred check as deferred, never as passed', async () => {
     await configure();
-    const deferred = await agentsys('checks', '--defer', 'premiere-native-journey',
-      '--reason', 'Live Premiere verification deferred for this phase', '--as', OP);
+    const deferred = await agentsys('checks', '--defer', 'extension-native-journey',
+      '--reason', 'Live extension verification deferred for this phase', '--as', OP);
     assert.equal(deferred.code, 0, deferred.stderr);
-    assert.match(deferred.stdout, /premiere-native-journey \(native\) — DEFERRED by/);
+    assert.match(deferred.stdout, /extension-native-journey \(native\) — DEFERRED by/);
     assert.match(deferred.stdout, /Deferred means untested and unverified, not passed/);
   });
 
   it('refuses to defer a check without the operator', async () => {
     await configure();
-    const { code } = await agentsys('checks', '--defer', 'premiere-native-journey', '--reason', 'x');
+    const { code } = await agentsys('checks', '--defer', 'extension-native-journey', '--reason', 'x');
     assert.equal(code, 2, 'deferring a check is an authority decision');
     const shown = await agentsys('checks');
     assert.doesNotMatch(shown.stdout, /DEFERRED/, 'nothing was deferred');
@@ -776,17 +776,17 @@ describe('deferred scope through the real configuration and acceptance surfaces'
 
   it('completes the current scope while the deferred check has no evidence', async () => {
     await configure();
-    await agentsys('checks', '--defer', 'premiere-native-journey', '--reason', 'deferred', '--as', OP);
+    await agentsys('checks', '--defer', 'extension-native-journey', '--reason', 'deferred', '--as', OP);
     const { stdout, code } = await agentsys('accept', '--evidence', writeEvidence([evidenceItem()]));
     assert.equal(code, 0, stdout);
-    assert.match(stdout, /^deferred premiere-native-journey/m);
-    assert.match(stdout, /Deferred and therefore untested, not passed: premiere-native-journey/);
+    assert.match(stdout, /^deferred extension-native-journey/m);
+    assert.match(stdout, /Deferred and therefore untested, not passed: extension-native-journey/);
     assert.match(stdout, /ACCEPTED for the tested scope/);
   });
 
   it('still blocks when the required web check is absent', async () => {
     await configure();
-    await agentsys('checks', '--defer', 'premiere-native-journey', '--reason', 'deferred', '--as', OP);
+    await agentsys('checks', '--defer', 'extension-native-journey', '--reason', 'deferred', '--as', OP);
     const { stdout, code } = await agentsys('accept', '--evidence', writeEvidence([]));
     assert.equal(code, 1, 'a deferral elsewhere cannot excuse a missing real check');
     assert.match(stdout, /BLOCKED {2}web-journey/);
@@ -795,7 +795,7 @@ describe('deferred scope through the real configuration and acceptance surfaces'
 
   it('still blocks when the required web check failed', async () => {
     await configure();
-    await agentsys('checks', '--defer', 'premiere-native-journey', '--reason', 'deferred', '--as', OP);
+    await agentsys('checks', '--defer', 'extension-native-journey', '--reason', 'deferred', '--as', OP);
     const evidence = writeEvidence([evidenceItem({ reportedOutcome: 'failed' })]);
     const { stdout, code } = await agentsys('accept', '--evidence', evidence);
     assert.equal(code, 1);
@@ -804,11 +804,11 @@ describe('deferred scope through the real configuration and acceptance surfaces'
 
   it('blocks again when this configuration explicitly requires the deferred check', async () => {
     await configure();
-    await agentsys('checks', '--defer', 'premiere-native-journey', '--reason', 'deferred', '--as', OP);
+    await agentsys('checks', '--defer', 'extension-native-journey', '--reason', 'deferred', '--as', OP);
     const { stdout, code } = await agentsys('accept',
-      '--evidence', writeEvidence([evidenceItem()]), '--require', 'premiere-native-journey');
+      '--evidence', writeEvidence([evidenceItem()]), '--require', 'extension-native-journey');
     assert.equal(code, 1, 'asking for the check back puts it back to blocking');
-    assert.match(stdout, /BLOCKED {2}premiere-native-journey/);
+    assert.match(stdout, /BLOCKED {2}extension-native-journey/);
     assert.match(stdout, /this configuration requires it anyway/);
   });
 
@@ -817,7 +817,7 @@ describe('deferred scope through the real configuration and acceptance surfaces'
     writeFileSync(join(state, 'required-checks.json'), JSON.stringify([
       { name: 'web-journey', requiredClass: 'real-provider' },
       {
-        name: 'premiere-native-journey', requiredClass: 'native',
+        name: 'extension-native-journey', requiredClass: 'native',
         deferral: { reason: 'retired by the run', deferredBy: 'run_abc123', deferredAt: new Date().toISOString() },
       },
     ]));
@@ -828,8 +828,8 @@ describe('deferred scope through the real configuration and acceptance surfaces'
 
   it('restores a deferred check to blocking', async () => {
     await configure();
-    await agentsys('checks', '--defer', 'premiere-native-journey', '--reason', 'deferred', '--as', OP);
-    const restored = await agentsys('checks', '--restore', 'premiere-native-journey', '--as', OP);
+    await agentsys('checks', '--defer', 'extension-native-journey', '--reason', 'deferred', '--as', OP);
+    const restored = await agentsys('checks', '--restore', 'extension-native-journey', '--as', OP);
     assert.equal(restored.code, 0);
     assert.doesNotMatch(restored.stdout, /DEFERRED/);
     const { code } = await agentsys('accept', '--evidence', writeEvidence([evidenceItem()]));

@@ -473,9 +473,9 @@ not accepted.
 The operator can put a check's whole scope outside the current phase:
 
 ```
-agentsys checks --defer premiere-native-journey \
-  --reason "Live Premiere verification deferred for this phase" --as you@example.com
-agentsys checks --restore premiere-native-journey --as you@example.com
+agentsys checks --defer extension-native-journey \
+  --reason "Live extension verification deferred for this phase" --as you@example.com
+agentsys checks --restore extension-native-journey --as you@example.com
 ```
 
 A deferred check does not block acceptance. It is **never reported as passed**: it
@@ -492,7 +492,7 @@ Deferral is a decision about the phase, not about every run inside it. A
 configuration that wants a deferred check enforced asks for it back:
 
 ```
-agentsys accept --evidence report.json --require premiere-native-journey
+agentsys accept --evidence report.json --require extension-native-journey
 ```
 
 That check then blocks exactly as it would have before the deferral, and its missing
