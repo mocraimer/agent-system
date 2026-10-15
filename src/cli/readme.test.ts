@@ -384,6 +384,17 @@ describe('the Markdown helpers read a document the way GitHub does', () => {
     assert.equal(markdownLines('    ```\nnot code').filter((l) => l.fence).length, 0, 'four spaces make an indented code block, not a fence');
   });
 
+  it('fixture: tilde fences are fences, and a fence of the other kind inside a block is content', () => {
+    const md = ['~~~sh', 'agentsys status', '```', 'still inside', '~~~', 'after'].join('\n');
+    assert.deepEqual(fencedBlocks(md), [['agentsys status', '```', 'still inside']]);
+    assert.equal(markdownLines(md).filter((l) => l.block === undefined && !l.fence).length, 1);
+  });
+
+  it('fixture: a section that exists but is empty is not a missing section', () => {
+    assert.equal(sectionOf('## A\n## B\ntext', /^A$/), '');
+    assert.equal(sectionOf('## B\ntext', /^A$/), undefined);
+  });
+
   it('fixture: a document that ends inside a fence fails, and a # inside quotes is not a comment', () => {
     assert.throws(() => markdownLines('```bash\nagentsys status'), /closing ```/);
     assert.equal(withoutComment('agentsys dispatch --prompt "fix # 12" # a comment'), 'agentsys dispatch --prompt "fix # 12"');
@@ -482,7 +493,7 @@ describe('the documents match the CLI they describe', () => {
 
   it('every README quick-start command appears verbatim in the agent runbook', () => {
     const quickStart = sectionOf(read(README_PATH), /^Quick start$/i);
-    assert.ok(quickStart, 'README has no "Quick start" section');
+    assert.ok(quickStart !== undefined, 'README has no "Quick start" section');
     const wanted = shellLines(quickStart);
     assert.ok(wanted.length > 0, 'README quick start holds no command');
     const have = new Set(shellLines(read(SETUP_PATH)).map((l) => l.replace(/\s+/g, ' ')));
@@ -514,7 +525,7 @@ describe('the README points to the page and to the agent runbook', () => {
 
   it('has a section for a coding agent that holds a paste-ready prompt naming the runbook', () => {
     const section = sectionOf(readme, /coding agent/i);
-    assert.ok(section, 'README has no section about a coding agent');
+    assert.ok(section !== undefined, 'README has no section about a coding agent');
     const prompts = fencedBlocks(section).filter((block) => block.join('\n').includes('docs/AGENT-SETUP.md'));
     assert.ok(prompts.length > 0, 'no fenced prompt in that section names docs/AGENT-SETUP.md');
     assert.match(section, /\]\([^)]*AGENT-SETUP\.md\)/, 'that section does not link docs/AGENT-SETUP.md');

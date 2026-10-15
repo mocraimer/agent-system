@@ -29,7 +29,9 @@ const html = (): string => read(join(SITE, 'index.html'));
 // ---- Helpers ---------------------------------------------------------------------
 
 const decode = (s: string): string =>
-  s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+  s.replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
 
 /** The text of the element with this id, as the browser would copy it. */
 function textOfId(page: string, id: string): string | undefined {
@@ -130,6 +132,7 @@ describe('the static-page checks catch drift', () => {
   it('fixture: the text of a copy block is read as the browser would copy it', () => {
     assert.equal(textOfId('<pre id="c">a &lt;path&gt; &amp; "b"\nnext</pre>', 'c'), 'a <path> & "b"\nnext');
     assert.equal(textOfId('<pre id="c">x</pre>', 'missing'), undefined);
+    assert.equal(textOfId('<pre id="c">it&#39;s &#x41;</pre>', 'c'), "it's A");
   });
 
   it('fixture: a PNG header is read, and a non-PNG is refused', () => {
@@ -176,7 +179,7 @@ describe('the page says what the README says', () => {
 
   it('copies the README quick start exactly, as text in the HTML', () => {
     const quickStart = sectionOf(readme, /^Quick start$/i);
-    assert.ok(quickStart, 'README has no "Quick start" section');
+    assert.ok(quickStart !== undefined, 'README has no "Quick start" section');
     const block = fencedBlocks(quickStart)[0]?.join('\n');
     assert.ok(block, 'README quick start has no fenced block');
     assert.equal(textOfId(html(), 'cmdYou'), block);
@@ -184,7 +187,7 @@ describe('the page says what the README says', () => {
 
   it("copies the README's paste-ready prompt exactly, as text in the HTML", () => {
     const section = sectionOf(readme, /coding agent/i);
-    assert.ok(section, 'README has no section about a coding agent');
+    assert.ok(section !== undefined, 'README has no section about a coding agent');
     const block = fencedBlocks(section).find((b) => b.join('\n').includes('docs/AGENT-SETUP.md'))?.join('\n');
     assert.ok(block, 'README has no paste-ready prompt that names docs/AGENT-SETUP.md');
     assert.equal(textOfId(html(), 'cmdAgent'), block);
@@ -207,12 +210,14 @@ describe('the page says what the README says', () => {
   });
 
   it('keeps no screenshot that docs/console-screens does not hold', () => {
+    assert.ok(existsSync(join(repoRoot, 'docs', 'console-screens')), 'docs/console-screens is missing');
     const sources = new Set(readdirSync(join(repoRoot, 'docs', 'console-screens')));
     const strays = readdirSync(join(SITE, 'assets')).filter((f) => !sources.has(f));
     assert.deepEqual(strays, [], 'in site/assets but not in docs/console-screens');
   });
 
   it('shows the console screenshots byte for byte', () => {
+    assert.ok(existsSync(join(repoRoot, 'docs', 'console-screens')), 'docs/console-screens is missing');
     const shots = readdirSync(join(repoRoot, 'docs', 'console-screens')).filter((f) => f.endsWith('.png'));
     assert.ok(shots.length > 0);
     for (const shot of shots) {

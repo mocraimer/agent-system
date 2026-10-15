@@ -20,21 +20,29 @@ export interface MdLine {
   block: number | undefined;
 }
 
-/** Splits a document into lines and marks the fenced blocks. A fence opens or closes a block when it is indented by at most three spaces, as in CommonMark. */
+/**
+ * Splits a document into lines and marks the fenced blocks. As in CommonMark, a fence of
+ * backticks or tildes, indented by at most three spaces, opens a block, and a fence of the
+ * same character closes it; a fence of the other kind inside a block is part of its content.
+ */
 export function markdownLines(md: string): MdLine[] {
   const out: MdLine[] = [];
   let block = -1;
-  let open = false;
+  let marker = '';
   for (const text of md.split('\n')) {
-    if (/^ {0,3}```/.test(text)) {
-      if (!open) block++;
-      open = !open;
+    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(text)?.[1]?.[0];
+    if (fence && marker === '') {
+      marker = fence;
+      block++;
+      out.push({ text, fence: true, block: undefined });
+    } else if (fence && fence === marker) {
+      marker = '';
       out.push({ text, fence: true, block: undefined });
     } else {
-      out.push({ text, fence: false, block: open ? block : undefined });
+      out.push({ text, fence: false, block: marker ? block : undefined });
     }
   }
-  if (open) throw new Error('the document ends inside a fenced block: a closing ``` is missing');
+  if (marker) throw new Error(`the document ends inside a fenced block: a closing ${marker.repeat(3)} is missing`);
   return out;
 }
 

@@ -11,8 +11,9 @@ import { extname, join, normalize, relative } from 'node:path';
  * JavaScript off, and holds still when the reader asks for less motion.
  *
  * It serves `site/` from a local HTTP server. Browsers treat a loopback address as a secure
- * context, which the clipboard API needs. The two font hosts are answered locally, so the run needs no network and
- * any other request that fails is a defect.
+ * context, which the clipboard API needs. The two font hosts are answered locally, so the page
+ * tests need no network and any other request that fails is a defect. Only the link-preview
+ * test lets the typefaces load, so the image shows them; it also passes offline, in system fonts.
  *
  * The first-screen shot at 1200 by 630 pixels is written to test-results/site-og.png.
  * To refresh the link preview, run `npm run test:ui`, then:
@@ -40,7 +41,10 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  await new Promise<void>((done) => server.close(() => done()));
+  await new Promise<void>((done) => {
+    server.close(() => done());
+    server.closeAllConnections();
+  });
 });
 
 /** Answer the font hosts with an empty stylesheet, so the page falls back to system fonts, offline. */
@@ -184,12 +188,16 @@ test('the first screen at 1200 by 630 is written for the link preview', async ({
   const context = await browser.newContext({ viewport: { width: 1200, height: 630 } });
   try {
     const page = await context.newPage();
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(base);
     // The terminal types out; wait until every line shows and the cursor is gone.
     await page.waitForFunction(() => {
       const lines = [...document.querySelectorAll<HTMLElement>('#heroTerm .ln')];
       return lines.length > 0 && lines.every((l) => l.style.display !== 'none') && !document.querySelector('#heroTerm .cursor');
-    }, undefined, { timeout: 15_000 });
+    }, undefined, { timeout: 15_000 }).catch((err: unknown) => {
+      throw new Error(`the hero terminal did not finish typing; page errors: ${errors.join('; ') || 'none'}`, { cause: err });
+    });
     await page.waitForTimeout(400);
     mkdirSync(join(process.cwd(), 'test-results'), { recursive: true });
     const shot = await page.screenshot({ path: join(process.cwd(), 'test-results', 'site-og.png') });
