@@ -110,6 +110,7 @@ describe('a real pass opens exactly one pull request with its evidence, and edit
     return { path, origin };
   }
 
+  // Holds the decision in docs/adr/20260918-local-console-and-proposing-improve.md.
   it('drafts a prompt edit, replays the frozen case before and after, and opens then updates one pull request', async () => {
     for (const c of reviewCards(10, promptDigest('review'), 3)) saveScorecard(c);
     freezeIncidentCase({
@@ -160,6 +161,7 @@ describe('a real pass opens exactly one pull request with its evidence, and edit
     assert.ok(coordinatorStore.writes.some((w) => w.kind === 'update-pull' && w.target === pr.number));
   });
 
+  // Holds the decision in docs/adr/20261014-prompt-proposals-need-a-named-repository.md.
   it('saves a prompt draft in the state directory, and opens nothing, when no coordinator repository is named for proposals', async () => {
     for (const c of reviewCards(10, promptDigest('review'), 3)) saveScorecard(c);
     const drafted = promptTemplate('review').replace('What to judge, in order:', 'What to judge, in order (retry loops need a bound):');
@@ -183,6 +185,7 @@ describe('a real pass opens exactly one pull request with its evidence, and edit
     assert.deepEqual(store.writes, [], 'nothing is written to any repository');
   });
 
+  // Holds the decision in docs/adr/20261014-prompt-proposals-need-a-named-repository.md.
   it('proposes prompts in the coordinator\'s own repository only when the floor names it', async () => {
     const { path } = coordinatorRepo();
     const deps = async () => {

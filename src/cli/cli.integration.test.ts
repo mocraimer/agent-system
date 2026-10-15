@@ -308,6 +308,7 @@ describe('authority through the real CLI', () => {
     assert.match(after.stdout, /Awaiting approval/);
   });
 
+  // Holds the decision in docs/adr/20261015-unsafe-actions-refused-before-authority.md.
   it('refuses to even record a grant that names a forbidden action', async () => {
     await agentsys('init', '--operator', OP);
     const { stderr, code } = await agentsys(
@@ -320,6 +321,7 @@ describe('authority through the real CLI', () => {
     assert.match(stderr, /not a spelling problem/, 'the message must not read as a typo');
   });
 
+  // Holds the decision in docs/adr/20261015-unsafe-actions-refused-before-authority.md.
   it('refuses a dispatch naming a forbidden action', async () => {
     await agentsys('init', '--operator', OP);
     const { stderr, code } = await agentsys(

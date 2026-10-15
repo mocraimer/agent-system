@@ -401,6 +401,7 @@ describe('narrowing and revocation', () => {
 /** The operator's floor these tests run under: one repository with a required base, one read-only project. */
 const FLOOR = { prBases: { 'example-org/larkspur': 'dev' }, readOnlyProjects: ['larkspur-prod'] };
 
+// Holds the decision in docs/adr/20261014-consumer-values-live-in-configuration.md.
 describe('the floor: constrained PR bases', () => {
   const SC = 'example-org/larkspur';
 
@@ -457,6 +458,7 @@ describe('the floor: constrained PR bases', () => {
   });
 });
 
+// Holds the decision in docs/adr/20261014-consumer-values-live-in-configuration.md.
 describe('the floor: read-only projects', () => {
   it('refuses a write to a read-only project', () => {
     box = sandbox();
@@ -501,6 +503,7 @@ describe('the floor: read-only projects', () => {
   });
 });
 
+// Holds the decision in docs/adr/20261015-unsafe-actions-refused-before-authority.md.
 describe('the floor no authority can relax', () => {
   for (const action of ['merge', 'auto-merge', 'force-push', 'release', 'deploy-prod']) {
     it(`refuses "${action}" even under a grant that lists it`, () => {

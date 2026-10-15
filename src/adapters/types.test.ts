@@ -112,6 +112,7 @@ describe('settings on a vendor-controlled runtime', () => {
   });
 });
 
+// Holds the decision in docs/adr/20261015-unconfirmed-run-settings-are-unknown.md.
 describe('what a run records about what actually ran', () => {
   it('records unknown where the vendor reports nothing', () => {
     const resolved = resolveSettings(VENDOR_CONTROLLED, { acceptVendorDefault: true });

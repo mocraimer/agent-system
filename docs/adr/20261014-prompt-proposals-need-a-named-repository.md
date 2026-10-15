@@ -41,6 +41,12 @@ machine until the operator says where it may go.
 - An operator who wants prompt pull requests names the repository once, and a checkout whose
   `origin` differs gets drafts, not pull requests.
 
+## Enforced by
+`src/loop/improve.test.ts` "proposes prompts in the coordinator's own repository only when the floor
+names it" and "saves a prompt draft in the state directory, and opens nothing, when no coordinator
+repository is named for proposals"; `src/cli/documented-setup.integration.test.ts` "holds no required
+base or read-only project in a clean state directory" holds that a fresh floor names no repository.
+
 ## Source
 - Decided during the first public release, on 2026-10-14, after a prompt proposal on the private
   repository was found to quote the target's name, paths and incident evidence.

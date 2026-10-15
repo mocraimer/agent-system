@@ -11,7 +11,8 @@ const run = promisify(execFile);
  * The loop never reads the working tree it is pointed at: other sessions switch
  * branches in that directory, so a file read there is whatever branch happened to
  * be checked out. Everything is read from the fetched base branch instead, and
- * work happens in worktrees the loop creates and removes itself.
+ * work happens in worktrees the loop creates and removes itself. See
+ * docs/adr/20261015-loop-policy-read-from-target-base.md.
  */
 export interface Repo {
   readonly path: string;
