@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
-import { headingSlugs } from './docs-testkit.js';
+import { escapeRe, headingSlugs } from './docs-testkit.js';
 
 // dist/cli -> dist -> repo root
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -33,7 +33,7 @@ const decode = (s: string): string =>
 
 /** The text of the element with this id, as the browser would copy it. */
 function textOfId(page: string, id: string): string | undefined {
-  const m = new RegExp(`<(pre|span|code)[^>]*\\bid="${id}"[^>]*>([\\s\\S]*?)</\\1>`).exec(page);
+  const m = new RegExp(`<([a-z]+)[^>]*\\bid="${escapeRe(id)}"[^>]*>([\\s\\S]*?)</\\1>`).exec(page);
   return m ? decode(m[2]!.replace(/<[^>]+>/g, '')) : undefined;
 }
 
@@ -83,7 +83,7 @@ function repoLinkProblems(text: string): string[] {
     if (anchor === 'readme' && path === 'README.md') return;
     if (anchor && file.endsWith('.md') && !headingSlugs(read(file)).has(anchor)) problems.push(`${link}\n    no heading "${anchor}" in ${path}`);
   };
-  for (const m of text.matchAll(/https:\/\/github\.com\/mocraimer\/agent-system(?:\/(?:blob|tree)\/main\/([^"'#)\s]+))?(?:#([\w-]+))?/g)) {
+  for (const m of text.matchAll(/https:\/\/github\.com\/mocraimer\/agent-system(?:\/(?:blob|tree)\/main\/([^"'#)\s]+))?(?:#([\p{L}\p{N}_-]+))?/gu)) {
     check(m[1] ?? 'README.md', m[2], m[0]);
   }
   for (const m of text.matchAll(/https:\/\/raw\.githubusercontent\.com\/mocraimer\/agent-system\/main\/([^"'#)\s]+)/g)) check(m[1]!, undefined, m[0]);

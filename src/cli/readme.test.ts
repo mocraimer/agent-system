@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { promisify } from 'node:util';
 import {
-  CLI_PREFIX, commandLines, escapeRe, fencedBlocks, headingSlugs, proseOf, sectionOf, shellLines,
+  CLI_PREFIX, commandLines, escapeRe, fencedBlocks, headingSlugs, markdownLines, proseOf, sectionOf, shellLines, withoutComment,
 } from './docs-testkit.js';
 
 const run = promisify(execFile);
@@ -114,7 +114,7 @@ function isSafeToRun(line: string): boolean {
   switch (sub) {
     case 'init': return flags.every((f) => f === '--operator');
     case 'readiness': return flags.every((f) => f === '--runtime');
-    case 'status': return flags.every((f) => f === '--task');
+    case 'status': return argv.length === 1;
     case 'approvals': return argv.length === 1;
     case 'ledger': return argv.length === 1 || (argv.length === 2 && second === 'show');
     case 'floor': return flags.length === 1 && flags[0] === '--show';
@@ -138,12 +138,23 @@ async function runDocumented(line: string, state: string): Promise<Ran> {
     });
     return { code: 0, stdout, stderr };
   } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; code?: number };
-    return { code: e.code ?? 1, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+    const e = err as { stdout?: string; stderr?: string; code?: number | string };
+    // A failure to start the process sets `code` to a string such as ENOENT.
+    return { code: typeof e.code === 'number' ? e.code : 1, stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
   }
 }
 
 const RUNTIMES = ['pi-local', 'codex-cloud', 'claude-web', 'claude-local'];
+
+/** What each other safe command prints on a fresh state directory. */
+const OUTPUT: Record<string, RegExp> = {
+  approvals: /^\[\]/,
+  'grant list': /^\[\]/,
+  ledger: /Paid-call allowance: \$10\.00/,
+  floor: /"prBases"/,
+  config: /"operator"/,
+  policy: /"fiveHourThresholdPercent"/,
+};
 
 /** What a documented command must print on a fresh state directory, and nothing more than that. */
 function resultProblems(line: string, ran: Ran): string[] {
@@ -168,11 +179,13 @@ function resultProblems(line: string, ran: Ran): string[] {
       expect(ran.code === 0 && /No runs recorded/.test(out), 'status on a fresh state should say no runs are recorded');
       break;
     case 'dispatch':
-      expect(ran.code === 1 && /Awaiting approval/.test(out) && /there are no grants/.test(out),
+      expect(ran.code === 1 && /Awaiting approval/.test(out) && /No approval was supplied/.test(out) && /there are no grants/.test(out),
         'a dispatch with no approval should exit 1 and be held for approval');
       break;
-    default:
-      expect(ran.code === 0, `${sub} should exit 0`);
+    default: {
+      const prints = OUTPUT[sub === 'grant' ? 'grant list' : sub];
+      expect(ran.code === 0 && (prints === undefined || prints.test(out)), `${sub} should exit 0 and print what a fresh state holds`);
+    }
   }
   return problems;
 }
@@ -194,7 +207,7 @@ function snapshot(dir: string): string | null {
   const rows: string[] = [];
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
     const path = join(entry.parentPath, entry.name);
-    rows.push(`${path} ${statSync(path).mtimeMs}`);
+    try { rows.push(`${path} ${statSync(path).mtimeMs}`); } catch { rows.push(`${path} gone`); }
   }
   return rows.sort().join('\n');
 }
@@ -316,6 +329,7 @@ describe('the documented-command runner executes only what it may', () => {
     assert.equal(isSafeToRun('agentsys grant create --as me'), false);
     assert.equal(isSafeToRun('agentsys loop arm --repo ~/src/x'), false);
     assert.equal(isSafeToRun('agentsys dispatch --task t --approval=apv_1 --prompt x'), false);
+    assert.equal(isSafeToRun('agentsys status --task t1'), false, 'a status for one task prints another result than a fresh state');
   });
 
   it('fixture: a command line is read the same way when it is checked and when it is run', () => {
@@ -343,6 +357,20 @@ describe('the documented-command runner executes only what it may', () => {
     const wrong = resultProblems('agentsys status', { code: 1, stdout: 'Error', stderr: '' });
     assert.equal(wrong.length, 1);
     assert.match(wrong[0]!, /status on a fresh state/);
+  });
+});
+
+describe('the Markdown helpers read a document the way GitHub does', () => {
+  it('fixture: a heading with trailing hashes is found, and a fence may be indented by three spaces but not four', () => {
+    assert.equal(sectionOf('## Quick start ##\n\nbody\n\n## Next\n', /^Quick start$/), '\nbody\n');
+    assert.equal(markdownLines('   ```\ncode\n   ```').filter((l) => l.block !== undefined).length, 1);
+    assert.equal(markdownLines('    ```\nnot code').filter((l) => l.fence).length, 0, 'four spaces make an indented code block, not a fence');
+  });
+
+  it('fixture: a document that ends inside a fence fails, and a # inside quotes is not a comment', () => {
+    assert.throws(() => markdownLines('```bash\nagentsys status'), /closing ```/);
+    assert.equal(withoutComment('agentsys dispatch --prompt "fix # 12" # a comment'), 'agentsys dispatch --prompt "fix # 12"');
+    assert.equal(withoutComment('npm ci'), 'npm ci');
   });
 });
 

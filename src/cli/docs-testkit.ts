@@ -20,12 +20,13 @@ export interface MdLine {
   block: number | undefined;
 }
 
+/** Splits a document into lines and marks the fenced blocks. A fence opens or closes a block when it is indented by at most three spaces, as in CommonMark. */
 export function markdownLines(md: string): MdLine[] {
   const out: MdLine[] = [];
   let block = -1;
   let open = false;
   for (const text of md.split('\n')) {
-    if (/^\s*```/.test(text)) {
+    if (/^ {0,3}```/.test(text)) {
       if (!open) block++;
       open = !open;
       out.push({ text, fence: true, block: undefined });
@@ -33,6 +34,7 @@ export function markdownLines(md: string): MdLine[] {
       out.push({ text, fence: false, block: open ? block : undefined });
     }
   }
+  if (open) throw new Error('the document ends inside a fenced block: a closing ``` is missing');
   return out;
 }
 
@@ -53,6 +55,18 @@ export function proseOf(md: string): string {
     .join('\n');
 }
 
+/** The line without a trailing shell comment: a `#` that follows whitespace, outside any quotes. */
+export function withoutComment(line: string): string {
+  let quote = '';
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (quote) { if (c === quote) quote = ''; continue; }
+    if (c === '"' || c === "'") quote = c;
+    else if (c === '#' && i > 0 && /\s/.test(line[i - 1]!) && (i + 1 === line.length || /\s/.test(line[i + 1]!))) return line.slice(0, i).trimEnd();
+  }
+  return line.trim();
+}
+
 /** One logical line of a document: a fenced line, with backslash continuations joined, or a prose line. */
 export interface Logical { text: string; fenced: boolean }
 
@@ -67,7 +81,7 @@ export function logicalLines(md: string): Logical[] {
     while (line.endsWith('\\') && lines[i + 1]?.block === block) {
       line = `${line.slice(0, -1).trimEnd()} ${lines[++i]!.text.trim()}`;
     }
-    out.push({ text: line.replace(/\s+#\s.*$/, '').trim(), fenced: true });
+    out.push({ text: withoutComment(line), fenced: true });
   }
   return out;
 }
@@ -101,7 +115,7 @@ export function sectionOf(md: string, title: RegExp): string | undefined {
   let level = 0;
   const body: string[] = [];
   for (const { text, fence, block } of markdownLines(md)) {
-    const heading = fence || block !== undefined ? null : /^(#{1,6})\s+(.+?)\s*$/.exec(text);
+    const heading = fence || block !== undefined ? null : /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(text);
     if (level === 0) {
       if (heading && title.test(heading[2]!)) level = heading[1]!.length;
     } else if (heading && heading[1]!.length <= level) {

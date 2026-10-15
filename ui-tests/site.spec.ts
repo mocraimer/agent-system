@@ -74,7 +74,7 @@ for (const [width, height] of [[1280, 800], [375, 812]] as const) {
       // Three of the four screenshots sit in tabs that stay hidden until chosen, so open each tab.
       for (const tab of await page.locator('#consoleTabs [role=tab]').all()) {
         await tab.click();
-        const img = page.locator(`#${await tab.getAttribute('aria-controls')} img`);
+        const img = page.locator(`#${(await tab.getAttribute('aria-controls')) ?? ''} img`);
         await img.scrollIntoViewIfNeeded();
         await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0), { message: 'screenshot loaded' }).toBe(true);
       }
@@ -91,9 +91,9 @@ test('each copy button puts exactly its command text on the clipboard and shows 
     expect(await page.locator('.copy').count()).toBe(2);
     for (const tab of ['#t-you', '#t-agent']) {
       await page.locator(tab).click();
-      const panel = page.locator(`#${await page.locator(tab).getAttribute('aria-controls')}`);
+      const panel = page.locator(`#${(await page.locator(tab).getAttribute('aria-controls')) ?? ''}`);
       const button = panel.locator('.copy');
-      const expected = await page.locator(`#${await button.getAttribute('data-copy')}`).evaluate((el) => el.textContent ?? '');
+      const expected = await page.locator(`#${(await button.getAttribute('data-copy')) ?? ''}`).evaluate((el) => el.textContent ?? '');
       await button.click();
       await expect(button).toHaveText('copied');
       expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
