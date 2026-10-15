@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agent-system — coding agents run only on work you approved</title>
+<meta name="description" content="A command-line coordinator that runs Claude Code, Pi, Codex cloud, and Claude Code web on work you approved, inside your subscription's allowance, and keeps evidence of every run.">
+<meta name="theme-color" content="#070a11">
+<link rel="canonical" href="https://mocraimer.github.io/agent-system/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="agent-system — coding agents run only on work you approved">
+<meta property="og:description" content="You approve the work. agent-system keeps each run inside your subscription's allowance and saves what the run did.">
+<meta property="og:url" content="https://mocraimer.github.io/agent-system/">
+<meta property="og:image" content="https://mocraimer.github.io/agent-system/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="agent-system — coding agents run only on work you approved">
+<meta name="twitter:description" content="You approve the work. agent-system keeps each run inside your subscription's allowance and saves what the run did.">
+<meta name="twitter:image" content="https://mocraimer.github.io/agent-system/og.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23070a11'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23ffb454'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#070a11; --panel:#0d121c; --panel2:#121a28; --ink:#e9edf5; --dim:#a6afc1; --faint:#8b95a9;
+  --line:rgba(255,255,255,.09); --line2:rgba(255,255,255,.17);
+  --accent:#ffb454; --accent-ink:#1b1100; --accent-soft:rgba(255,180,84,.11); --accent-line:rgba(255,180,84,.5);
+  --serif:'Instrument Serif',Georgia,'Times New Roman',serif;
+  --sans:Inter,system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--bg);scroll-behavior:smooth;scroll-padding-top:72px}
+body{color:var(--ink);font:400 17px/1.62 var(--sans);-webkit-font-smoothing:antialiased;overflow-x:hidden;
+  background:radial-gradient(900px 520px at 12% -6%,rgba(255,180,84,.07),transparent 70%),var(--bg)}
+img{max-width:100%;height:auto;display:block}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-line)}
+a:hover{border-color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+code{font:500 .88em var(--mono);color:#fff;background:rgba(255,255,255,.07);padding:2px 6px;border-radius:5px;overflow-wrap:anywhere}
+p{color:#c6cddb} p+p{margin-top:12px}
+b,strong{color:var(--ink);font-weight:600}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.skip{position:absolute;left:12px;top:-60px;z-index:50;background:var(--accent);color:var(--accent-ink);padding:8px 14px;border-radius:8px;border:0;font-weight:600}
+.skip:focus{top:12px}
+
+/* fixed chrome */
+#bar{position:fixed;top:0;left:0;right:0;height:2px;z-index:40;background:var(--accent);transform:scaleX(0);transform-origin:left;box-shadow:0 0 10px rgba(255,180,84,.5)}
+#top{position:fixed;top:0;left:0;right:0;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px clamp(16px,4vw,40px);background:linear-gradient(180deg,rgba(7,10,17,.92),rgba(7,10,17,.6) 70%,transparent)}
+.brand{display:flex;align-items:center;gap:10px;font:500 13px/1 var(--mono);color:var(--ink);border:0}
+.brand i{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+.topnav{display:flex;gap:8px}
+.pill{font:500 12.5px/1 var(--mono);color:var(--dim);padding:9px 13px;border-radius:999px;border:1px solid var(--line2);background:rgba(10,14,22,.7);transition:color .2s,border-color .2s,background .2s}
+.pill:hover{color:#fff;border-color:rgba(255,255,255,.35)}
+.pill.go{color:var(--accent);border-color:var(--accent-line)}
+.pill.go:hover{background:var(--accent-soft)}
+#rail{position:fixed;right:18px;top:50%;transform:translateY(-50%);z-index:30;display:flex;flex-direction:column;gap:6px}
+#rail a{display:flex;align-items:center;justify-content:flex-end;gap:10px;border:0;font:500 11px/1 var(--mono);color:transparent;padding:5px 2px;letter-spacing:.04em;transition:color .25s}
+#rail a::after{content:'';width:7px;height:7px;border-radius:50%;background:#3b4560;transition:background .3s,transform .3s}
+#rail:hover a,#rail a:focus-visible{color:var(--faint)}
+#rail:hover a.on,#rail a.on:focus-visible{color:var(--ink)}
+#rail a.on::after{background:var(--accent);transform:scale(1.4);box-shadow:0 0 10px var(--accent)}
+
+/* layout */
+main{max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,56px)}
+.chapter{padding:clamp(72px,13vh,140px) 0;border-top:1px solid var(--line)}
+.hero{border-top:0;min-height:100vh;min-height:100svh;display:flex;align-items:center;padding:clamp(84px,12vh,120px) 0 clamp(40px,8vh,80px)}
+.cols{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:clamp(28px,4.5vw,64px);align-items:start;width:100%}
+.cols.hero-cols{align-items:center}
+.stick{position:sticky;top:96px}
+.chip{display:inline-flex;align-items:center;gap:8px;font:500 11.5px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:16px}
+.chip i{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+h1,h2,h3{font-family:var(--serif);font-weight:400;letter-spacing:-.01em;color:var(--ink)}
+h1{font-size:clamp(42px,6vw,76px);line-height:1;max-width:13ch}
+h2{font-size:clamp(32px,3.6vw,48px);line-height:1.05;margin-bottom:16px;max-width:24ch}
+h3{font-size:24px;line-height:1.15;margin-bottom:6px}
+h1 em,h2 em{font-style:italic;color:var(--accent)}
+.lede{font-size:clamp(17px,1.5vw,19.5px);color:#c3cad9;max-width:34em;margin-top:22px}
+.card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:16px;padding:24px 26px;box-shadow:0 24px 60px rgba(0,0,0,.35)}
+.card+.card{margin-top:14px}
+.small{font-size:14px;color:var(--faint);margin-top:14px}
+.cta-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}
+.btn{display:inline-block;font:500 13.5px/1 var(--mono);color:var(--accent-ink);background:var(--accent);border:0;border-radius:999px;padding:13px 20px;cursor:pointer;transition:transform .15s,box-shadow .2s;box-shadow:0 0 26px rgba(255,180,84,.28)}
+.btn:hover{transform:translateY(-1px);box-shadow:0 0 36px rgba(255,180,84,.45)}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line2);box-shadow:none}
+.btn.ghost:hover{border-color:rgba(255,255,255,.4)}
+
+/* terminal */
+.term{background:#04060a;border:1px solid var(--line2);border-radius:12px;overflow:hidden;box-shadow:0 30px 70px rgba(0,0,0,.5)}
+.term .hd{display:flex;align-items:center;gap:7px;padding:10px 14px;border-bottom:1px solid var(--line);font:500 11.5px/1 var(--mono);color:var(--faint)}
+.term .hd i{width:9px;height:9px;border-radius:50%;background:#2a3246}
+.term .hd span{margin-left:8px}
+.term pre{margin:0;padding:16px 18px 18px;font:400 12.5px/1.7 var(--mono);color:#aab4c8;white-space:pre-wrap;overflow-wrap:anywhere}
+.term .ln{display:block}
+.term .c{color:#fff}
+.term .c::before{content:'$ ';color:var(--accent)}
+.term .hold{color:var(--accent)}
+.term .dim{color:var(--faint)}
+.note{font-size:14px;color:var(--faint);margin-top:12px}
+
+/* two checks */
+.flow{list-style:none;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.flow li{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 12px 16px;font-size:14px;color:var(--dim)}
+.flow li b{display:block;font:500 13px/1.2 var(--mono);color:var(--ink);margin-bottom:6px}
+.flow li.gate{border-color:var(--accent-line);background:linear-gradient(180deg,var(--accent-soft),var(--panel))}
+.flow li.gate b{color:var(--accent)}
+.flow li:not(:last-child)::after{content:'→';position:absolute;right:-10px;top:50%;transform:translate(50%,-50%);color:var(--faint);font:500 14px var(--mono);z-index:2;background:var(--bg);border-radius:50%;width:18px;text-align:center;line-height:18px}
+.checks{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+.checks .card{margin:0}
+.checks h3{font-size:22px}
+
+/* jobs */
+.jobs{list-style:none;border-top:1px solid var(--line)}
+.jobs li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px 28px;padding:20px 0;border-bottom:1px solid var(--line)}
+.jobs h3{font-size:23px;margin:0}
+.jobs p{font-size:15.5px;margin-top:4px}
+.jobs .how{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.jobs .how span{font:500 12.5px/1.4 var(--mono);color:#fff;background:rgba(255,255,255,.06);border:1px solid var(--line);padding:6px 10px;border-radius:8px;overflow-wrap:anywhere}
+.jobs .how a{font-size:14px}
+
+/* loop */
+.stages{list-style:none;counter-reset:s;margin-top:6px}
+.stages li{counter-increment:s;display:grid;grid-template-columns:34px minmax(0,1fr);gap:0 12px;padding:11px 0;border-bottom:1px solid var(--line);font-size:15.5px}
+.stages li::before{content:counter(s,decimal-leading-zero);font:500 12px/1.9 var(--mono);color:var(--faint)}
+.stages b{display:inline-block;min-width:4.8em;font:500 14px var(--mono);color:#fff}
+.stages .you{color:var(--accent)}
+.ladder{list-style:none;counter-reset:r -1;margin-top:6px}
+.ladder li{counter-increment:r;display:grid;grid-template-columns:30px 92px minmax(0,1fr);gap:0 10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14.5px;color:var(--dim)}
+.ladder li::before{content:counter(r);font:500 13px/1.7 var(--mono);color:var(--faint)}
+.ladder b{font:500 13px/1.7 var(--mono);color:#fff}
+.ladder li.stop{border-bottom:2px solid var(--accent);padding-bottom:12px}
+.ladder li.stop b{color:var(--accent)}
+.stopnote{font:500 12.5px/1.5 var(--mono);color:var(--accent);margin-top:10px}
+
+/* limits */
+.never{list-style:none;display:grid;gap:10px;margin-top:6px}
+.never li{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;font-size:16px;color:#d3d9e6}
+.never li::before{content:'×';font:500 16px/1 var(--mono);color:var(--accent);margin-right:12px}
+.never li small{display:block;font-size:14px;color:var(--faint);margin:2px 0 0 28px}
+
+/* evidence */
+.facts{list-style:none;display:grid;gap:12px;margin-top:6px}
+.facts li{padding-left:18px;position:relative;font-size:16px;color:#c6cddb}
+.facts li::before{content:'';position:absolute;left:0;top:.7em;width:7px;height:2px;background:var(--accent)}
+
+/* tabs and figures */
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 14px}
+.tabs [role=tab]{all:unset;cursor:pointer;font:500 12.5px/1 var(--mono);color:var(--dim);padding:9px 12px;border-radius:8px;border:1px solid var(--line);transition:color .2s,background .2s,border-color .2s}
+.tabs [role=tab]:hover{color:#fff}
+.tabs [role=tab][aria-selected=true]{color:var(--accent);background:var(--accent-soft);border-color:var(--accent-line)}
+.tabs [role=tab]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.panel+.panel{margin-top:22px}
+.panel h3{font-size:21px;margin-bottom:8px}
+figure{margin:0}
+figure img{border-radius:10px;border:1px solid var(--line2);box-shadow:0 24px 60px rgba(0,0,0,.45)}
+figcaption{font-size:14.5px;color:var(--faint);margin-top:12px;max-width:46em}
+.cmd{position:relative;margin-top:10px;background:#04060a;border:1px solid var(--accent-line);border-radius:10px;box-shadow:0 0 40px rgba(255,180,84,.07)}
+.cmd pre{margin:0;padding:16px 70px 16px 16px;font:500 13px/1.65 var(--mono);color:#fff4e0;white-space:pre-wrap;overflow-wrap:anywhere}
+.copy{display:none;position:absolute;top:9px;right:9px;font:500 11.5px/1 var(--mono);color:var(--dim);background:rgba(255,255,255,.06);border:1px solid var(--line2);border-radius:6px;padding:7px 9px;cursor:pointer}
+.js .copy{display:block}
+.copy:hover{color:#fff}
+.copy.hit{color:var(--accent-ink);background:var(--accent);border-color:var(--accent)}
+.links{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:22px;font-size:15px}
+footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color:var(--faint);display:flex;flex-wrap:wrap;gap:8px 24px;justify-content:space-between}
+
+/* enhancement: motion only where it answers the visitor */
+.js .hero .rv{animation:rise .9s cubic-bezier(.2,.7,.2,1) both;animation-delay:var(--d,0s)}
+@keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.js .panel:not([hidden]){animation:fade .3s ease both}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.js .stages li{transition:opacity .3s}
+.cursor{display:inline-block;width:7px;height:1em;background:var(--accent);vertical-align:-2px;margin-left:2px;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:0}}
+
+@media (max-width:900px){
+  body{font-size:16px}
+  #rail{display:none}
+  .cols{grid-template-columns:minmax(0,1fr)}
+  .stick{position:static}
+  .hero{align-items:flex-start;padding-top:96px}
+  .flow{grid-template-columns:minmax(0,1fr)}
+  .flow li:not(:last-child)::after{content:'↓';right:auto;left:50%;top:auto;bottom:-10px;transform:translate(-50%,50%)}
+  .checks{grid-template-columns:minmax(0,1fr)}
+  .jobs li{grid-template-columns:minmax(0,1fr)}
+  .topnav .pill:not(.go){display:none}
+  .term pre{font-size:11.5px}
+  .cmd pre{font-size:12px;padding-right:62px}
+  .ladder li{grid-template-columns:24px 84px minmax(0,1fr)}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .js .hero .rv,.js .panel:not([hidden]){animation:none}
+  .cursor{animation:none}
+  .btn,.pill,#rail a::after{transition:none}
+  #bar{box-shadow:none}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#install">Skip to install</a>
+<div id="bar" aria-hidden="true"></div>
+<header id="top">
+  <a class="brand" href="#intro" aria-label="agent-system, top of page"><i></i>agent-system</a>
+  <nav class="topnav" aria-label="Page links">
+    <a class="pill" href="https://github.com/mocraimer/agent-system">GitHub ↗</a>
+    <a class="pill go" href="#install">Install ↓</a>
+  </nav>
+</header>
+<nav id="rail" aria-label="Chapters">
+  <a href="#intro">Intro</a>
+  <a href="#checks">Two checks</a>
+  <a href="#jobs">What you can do</a>
+  <a href="#loop">Ticket loop</a>
+  <a href="#limits">Never does</a>
+  <a href="#evidence">Evidence</a>
+  <a href="#console">Console</a>
+  <a href="#install">Install</a>
+</nav>
+
+<main id="main">
+
+<section class="chapter hero" id="intro" data-ch>
+  <div class="cols hero-cols">
+    <div>
+      <div class="chip rv" style="--d:.05s"><i></i>Open source · MIT · Node.js 22.12+</div>
+      <h1 class="rv" style="--d:.15s">Coding agents run only on work <em>you approved.</em></h1>
+      <p class="lede rv" style="--d:.3s">agent-system is a command-line coordinator for Claude Code, Pi, Codex cloud, and Claude Code web. You approve the work. It keeps each run inside your subscription's allowance and saves what the run did.</p>
+      <div class="cta-row rv" style="--d:.45s">
+        <a class="btn" href="#install">Install</a>
+        <a class="btn ghost" href="https://github.com/mocraimer/agent-system#readme">Read the README</a>
+      </div>
+    </div>
+    <div class="rv" style="--d:.4s">
+      <div class="term" aria-label="Terminal: a fresh install refuses a dispatch">
+        <div class="hd"><i></i><i></i><i></i><span>fresh install</span></div>
+<pre id="heroTerm"><span class="ln c">agentsys init --operator you@example.com</span><span class="ln dim">Operator set to you@example.com. No autonomy grants are active.</span><span class="ln c">agentsys dispatch --task first-try \
+  --repo example-org/larkspur --class ci-repair \
+  --runtime claude-local --profile default \
+  --actions author-changes \
+  --estimate-five-hour 1 --estimate-weekly 1 \
+  --estimate-basis operator-bound \
+  --prompt "should not run"</span><span class="ln hold">Awaiting approval (task first-try): No approval was supplied and there are no grants.</span></pre>
+      </div>
+      <p class="note">Nothing ran. A fresh install has no approvals and no grants, so every dispatch is held.</p>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="checks" data-ch>
+  <div class="chip"><i></i>01 · Two checks</div>
+  <h2>Every run passes <em>two checks.</em></h2>
+  <p style="max-width:40em;margin-bottom:26px">Either check can refuse on its own. The runtime is where the agent runs; the evidence stays on your machine.</p>
+  <ol class="flow">
+    <li><b>Request</b>A task, a repository, a runtime, the actions it may take</li>
+    <li class="gate"><b>Authority</b>An approval or a grant covers this exact work</li>
+    <li class="gate"><b>Admission</b>The job fits the allowance left in every usage window</li>
+    <li><b>Runtime</b>Claude Code, Pi, Codex cloud, or Claude Code web</li>
+    <li><b>Evidence</b>Transcript, checks, and a scorecard, saved per run</li>
+  </ol>
+  <div class="checks">
+    <div class="card">
+      <h3>Authority</h3>
+      <p>An <b>approval</b> covers one task. A <b>grant</b> covers a class of work until you narrow or revoke it. Only the operator, the person who owns the installation, creates either. Text that an agent or a code host such as GitHub wrote is data, never an instruction.</p>
+    </div>
+    <div class="card">
+      <h3>Admission</h3>
+      <p>Before every dispatch it reads your subscription's usage and compares the job with each window the plan meters. If usage cannot be read, or the reading is stale, the job waits. Unknown is never treated as zero.</p>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="jobs" data-ch>
+  <div class="chip"><i></i>02 · What you can do</div>
+  <h2>Seven things you can do with it.</h2>
+  <ol class="jobs">
+    <li>
+      <div><h3>Run one approved task</h3><p>Approve a task for one repository, runtime, and set of actions, then dispatch it.</p></div>
+      <div class="how"><span>agentsys approve</span><span>agentsys dispatch</span><a href="https://github.com/mocraimer/agent-system/blob/main/docs/OPERATING.md#approving-one-task">Approving one task →</a></div>
+    </li>
+    <li>
+      <div><h3>Repair CI failures</h3><p>A failed CI run becomes a job. A standing grant lets matching repairs start without a new approval each time.</p></div>
+      <div class="how"><span>agentsys intake --event failure.json</span><a href="https://github.com/mocraimer/agent-system/blob/main/docs/OPERATING.md#feeding-events-in">Feeding events in →</a></div>
+    </li>
+    <li>
+      <div><h3>Work a repository's tickets</h3><p>The ticket loop shapes tickets, opens pull requests for the ones you grant, reviews and fixes them, and opens a release pull request.</p></div>
+      <div class="how"><span>agentsys loop arm --repo &lt;path&gt;</span><a href="https://github.com/mocraimer/agent-system/blob/main/examples/ticket-loop/README.md">Ticket loop example →</a></div>
+    </li>
+    <li>
+      <div><h3>Watch and steer</h3><p>A local console in your browser, or the same board printed in a terminal.</p></div>
+      <div class="how"><span>agentsys ui --repo &lt;path&gt;</span><a href="https://github.com/mocraimer/agent-system/blob/main/docs/CONTROL-UI.md">Local control UI →</a></div>
+    </li>
+    <li>
+      <div><h3>Connect a local agent over MCP</h3><p>A stdio MCP server that reads status, jobs, usage, readiness, evaluation, and evidence, and dispatches inside authority you already gave. It cannot create authority.</p></div>
+      <div class="how"><span>agentsys-mcp</span><a href="https://github.com/mocraimer/agent-system/blob/main/docs/MCP.md">Local MCP server →</a></div>
+    </li>
+    <li>
+      <div><h3>Keep evidence for every run</h3><p>Each run keeps a transcript and a scorecard. Replay frozen cases to compare configurations on work you do.</p></div>
+      <div class="how"><span>agentsys scorecards</span><a href="https://github.com/mocraimer/agent-system/blob/main/docs/OPERATING.md#evidence-and-evaluation">Evidence and evaluation →</a></div>
+    </li>
+    <li>
+      <div><h3>Stay inside your allowance</h3><p>Admission reads your usage before every dispatch. A ledger limits paid provider calls.</p></div>
+      <div class="how"><span>agentsys usage</span><span>agentsys ledger</span><a href="https://github.com/mocraimer/agent-system/blob/main/docs/OPERATING.md#subscription-admission">Subscription admission →</a></div>
+    </li>
+  </ol>
+</section>
+
+<section class="chapter" id="loop" data-ch>
+  <div class="chip"><i></i>03 · The ticket loop</div>
+  <h2>It works a repository's tickets <em>as far as you allow.</em></h2>
+  <div class="cols">
+    <div>
+      <p style="margin-bottom:14px">The loop runs one pass at a time. For each ticket it decides to act, skip with a reason, or report it blocked. A person takes every ticket from proposal to granted: <code>shaped</code> accepts the proposal, and <code>auto</code> grants the work.</p>
+      <ol class="stages">
+        <li><span><b>shape</b> Drafts a shaped body for a ticket and posts it as a proposal. Applies no label.</span></li>
+        <li><span><b>assess</b> Proposes a verdict for each ungranted ticket. Changes no ticket.</span></li>
+        <li><span><b>sweep</b> Works one granted ticket into a pull request.</span></li>
+        <li><span><b>review</b> A model from the other family reviews the pull request.</span></li>
+        <li><span><b>fix</b> Fixes findings on pull requests the loop opened, up to a round cap.</span></li>
+        <li><span><b>merge</b> Into <code>dev</code> only. Closed until a stop-line reaches 5 and you grant it.</span></li>
+        <li><span><b>close</b> Closes a ticket whose work merged.</span></li>
+        <li><span><b>release</b> Opens the <code>dev</code> → <code>main</code> pull request. <span class="you">Never merges it.</span></span></li>
+        <li><span><b>verify</b> After you merge a release and it deploys, runs your release checks and posts the results.</span></li>
+      </ol>
+    </div>
+    <div class="stick">
+      <div class="card">
+        <h3>Stop-lines</h3>
+        <p>Each ticket goes as far as its stop-line and no further. Every rung past it is a person's. The ladder is from the example policy.</p>
+        <ol class="ladder">
+          <li><b>proposal</b><span>A shape proposal matches the ticket body.</span></li>
+          <li><b>granted</b><span><code>shaped</code> is on the ticket and its effort has a current assessment.</span></li>
+          <li><b>pr-open</b><span>A pull request into <code>dev</code> is open, mergeable, checks passing.</span></li>
+          <li><b>reviewed</b><span>An independent review names the pull request's current head.</span></li>
+          <li class="stop"><b>clean</b><span>That review found nothing at medium or above.</span></li>
+          <li><b>dev</b><span>The pull request is merged into <code>dev</code>.</span></li>
+          <li><b>release</b><span>An open <code>dev</code> → <code>main</code> pull request lists it.</span></li>
+          <li><b>verified</b><span>The checks for the release passed on the deployed <code>main</code>.</span></li>
+        </ol>
+        <p class="stopnote">The example policy stops at rung 4. A person merges.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="limits" data-ch>
+  <div class="chip"><i></i>04 · Limits</div>
+  <h2>What it <em>never</em> does.</h2>
+  <div class="cols">
+    <ul class="never">
+      <li>Merge into <code>main</code></li>
+      <li>Turn on auto-merge</li>
+      <li>Force-push</li>
+      <li>Push to a base branch</li>
+      <li>Run a release</li>
+      <li>Deploy to production</li>
+      <li>Run anything on a fresh install<small>With no approval and no grant, every dispatch is held.</small></li>
+    </ul>
+    <div>
+      <p>It refuses these before it checks authority, so a grant written too broadly cannot reach them.</p>
+      <p>One narrow merge exists, and a fresh install has no grant for it. The ticket loop can merge a pull request into <code>dev</code> only when all of these are true:</p>
+      <ul class="facts" style="margin-top:12px">
+        <li>The ticket's stop-line reaches the <code>dev</code> rung.</li>
+        <li>An independent review of the current head is clean or has findings you accepted.</li>
+        <li><code>check-pr</code> reports the pull request ready.</li>
+        <li>You have granted <code>merge-dev</code>.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="evidence" data-ch>
+  <div class="chip"><i></i>05 · Evidence</div>
+  <h2>It records what happened, and says when it <em>does not know.</em></h2>
+  <div class="cols">
+    <ul class="facts">
+      <li>Each run keeps its transcript, event log, and artifacts under <code>evidence/&lt;run-id&gt;/</code> in the state directory.</li>
+      <li>A scorecard keeps three things apart: what the checks reported, what the agent said about itself, and what you thought of the result.</li>
+      <li>Reports give counts, not rates.</li>
+      <li>A Claude Code web dispatch ends as <code>remote-uncertain</code>, not <code>completed</code>, because the cloud acknowledges the prompt and reports nothing else.</li>
+      <li>Status output shows elapsed time and state, never an invented percentage.</li>
+    </ul>
+    <div>
+      <div class="term" aria-label="Terminal: the state of a fresh install">
+        <div class="hd"><i></i><i></i><i></i><span>still a fresh install</span></div>
+<pre><span class="ln c">agentsys status</span><span class="ln dim">No runs recorded.</span><span class="ln c">agentsys scorecards</span><span class="ln dim">Samples: 0</span><span class="ln dim">0 sample(s). These are raw counts of individual tasks, not a success rate or a reliability estimate …</span></pre>
+      </div>
+      <p class="note">The last line is cut here; the command prints the rest.</p>
+    </div>
+  </div>
+</section>
+
+<section class="chapter" id="console" data-ch>
+  <div class="chip"><i></i>06 · The console</div>
+  <h2>See what <em>needs you.</em></h2>
+  <p style="max-width:42em;margin-bottom:20px">The console is a local page, bound to loopback. It shows the tickets and pull requests that the loop works on, and what waits for your decision, with the evidence beside it. Every screenshot uses made-up data from the Larkspur example.</p>
+  <div class="tabs" role="tablist" aria-label="Console screenshots" id="consoleTabs">
+    <button role="tab" id="t-board" aria-controls="p-board" aria-selected="true">Board</button>
+    <button role="tab" id="t-inbox" aria-controls="p-inbox" aria-selected="false" tabindex="-1">Inbox</button>
+    <button role="tab" id="t-empty" aria-controls="p-empty" aria-selected="false" tabindex="-1">Nothing to do</button>
+    <button role="tab" id="t-stale" aria-controls="p-stale" aria-selected="false" tabindex="-1">Stale read</button>
+  </div>
+  <figure class="panel" id="p-board" role="tabpanel" aria-labelledby="t-board">
+    <img src="assets/board-populated.png" width="1280" height="800" loading="lazy" alt="The Board view in the console: a queue of decisions on the left, and the selected proposal with its evidence and next step on the right.">
+    <figcaption><b>Board.</b> A grouped queue of decisions beside the selected item's evidence and next step.</figcaption>
+  </figure>
+  <figure class="panel" id="p-inbox" role="tabpanel" aria-labelledby="t-inbox">
+    <img src="assets/inbox.png" width="1280" height="800" loading="lazy" alt="The Inbox view in the console: each item that needs you, with what it waits for and one action such as Send answer, Dismiss fault or Apply shaped.">
+    <figcaption><b>Inbox.</b> Every item that needs you, with what it waits for and its one action.</figcaption>
+  </figure>
+  <figure class="panel" id="p-empty" role="tabpanel" aria-labelledby="t-empty">
+    <img src="assets/board-nothing-to-do.png" width="1280" height="800" loading="lazy" alt="The Board view in the console with no decisions waiting: the status reads Nothing to do.">
+    <figcaption><b>Nothing to do.</b> Shown only when the read is current and nothing is queued, blocked, active, or waiting on you.</figcaption>
+  </figure>
+  <figure class="panel" id="p-stale" role="tabpanel" aria-labelledby="t-stale">
+    <img src="assets/board-stale.png" width="1280" height="800" loading="lazy" alt="The Board view in the console after a failed read: a banner says the read failed and the older snapshot is shown, and the status reads Unknown.">
+    <figcaption><b>Stale read.</b> A failed read keeps the last snapshot with its age and error, and no verdict comes from it.</figcaption>
+  </figure>
+</section>
+
+<section class="chapter" id="install" data-ch>
+  <div class="chip"><i></i>07 · Start</div>
+  <h2>Try it on a <em>fresh install.</em></h2>
+  <p style="max-width:42em">You need Node.js 22.12 or newer and one signed-in runtime. Each runtime also needs the manifest-dev plugins; the <a href="https://github.com/mocraimer/agent-system#what-each-runtime-needs">README lists what each runtime needs</a>.</p>
+  <div class="tabs" role="tablist" aria-label="Who runs the setup" id="installTabs" style="margin-top:22px">
+    <button role="tab" id="t-you" aria-controls="p-you" aria-selected="true">You</button>
+    <button role="tab" id="t-agent" aria-controls="p-agent" aria-selected="false" tabindex="-1">Your coding agent</button>
+  </div>
+  <div class="panel" id="p-you" role="tabpanel" aria-labelledby="t-you">
+    <h3>Install, build, and see the first refusal</h3>
+    <div class="cmd">
+<pre id="cmdYou">git clone https://github.com/mocraimer/agent-system.git
+cd agent-system
+npm ci
+npm run build
+npm install -g .
+agentsys init --operator you@example.com
+agentsys readiness --runtime claude-local
+agentsys dispatch --task first-try --repo example-org/larkspur --class ci-repair \
+  --runtime claude-local --profile default --actions author-changes \
+  --estimate-five-hour 1 --estimate-weekly 1 --estimate-basis operator-bound \
+  --prompt "should not run"</pre>
+      <button class="copy" type="button" data-copy="cmdYou" aria-label="Copy the install commands">copy</button>
+    </div>
+    <p class="small">If <code>npm install -g .</code> fails with a permissions error, skip it and write <code>node dist/cli/main.js</code> wherever a command says <code>agentsys</code>. <code>readiness</code> exits 1 and names what is missing if the runtime is not set up. The <code>dispatch</code> exits 1 on purpose: nothing runs without your approval.</p>
+  </div>
+  <div class="panel" id="p-agent" role="tabpanel" aria-labelledby="t-agent">
+    <h3>Paste this to your coding agent</h3>
+    <div class="cmd">
+<pre id="cmdAgent">Set up agent-system by following
+https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/AGENT-SETUP.md
+Do the numbered steps and run only the commands the guide gives.
+Ask me for the operator email and for the runtimes I will use; do not choose them.
+Do not approve work, create grants, dispatch work under an approval or grant, or
+arm the loop. For each of those, tell me what it needs and stop. End by reporting
+the result of every step.</pre>
+      <button class="copy" type="button" data-copy="cmdAgent" aria-label="Copy the prompt for your coding agent">copy</button>
+    </div>
+    <p class="small">The agent installs and checks the tool, then stops at every step that needs you. It never creates authority.</p>
+  </div>
+  <div class="links">
+    <a href="https://github.com/mocraimer/agent-system#readme">README</a>
+    <a href="https://github.com/mocraimer/agent-system/blob/main/docs/OPERATING.md">Operator guide</a>
+    <a href="https://github.com/mocraimer/agent-system/blob/main/docs/AGENT-SETUP.md">Setup steps for an agent</a>
+    <a href="https://github.com/mocraimer/agent-system">GitHub</a>
+  </div>
+</section>
+
+</main>
+<div class="sr" id="status" role="status" aria-live="polite"></div>
+<div style="max-width:1180px;margin:0 auto;padding:0 clamp(20px,5vw,56px)">
+  <footer><span>MIT licensed · <a href="https://github.com/mocraimer/agent-system">github.com/mocraimer/agent-system</a></span><span>Examples use the made-up Larkspur product.</span></footer>
+</div>
+
+<script>
+(() => {
+  const d = document, root = d.documentElement;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  root.classList.add('js');
+  const $ = (s, el = d) => el.querySelector(s), $$ = (s, el = d) => [...el.querySelectorAll(s)];
+  const status = $('#status');
+
+  // Progress bar and the chapter the reader is in.
+  const bar = $('#bar'), rail = $$('#rail a');
+  const progress = () => {
+    const max = root.scrollHeight - innerHeight;
+    bar.style.transform = `scaleX(${max > 0 ? Math.min(1, scrollY / max) : 0})`;
+  };
+  addEventListener('scroll', progress, { passive: true });
+  addEventListener('resize', progress);
+  progress();
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => entries.forEach((e) => {
+      if (e.isIntersecting) rail.forEach((a) => a.classList.toggle('on', a.getAttribute('href') === `#${e.target.id}`));
+    }), { rootMargin: '-45% 0px -50% 0px' });
+    $$('[data-ch]').forEach((c) => io.observe(c));
+  }
+
+  // The hero terminal types out once, unless the reader asks for less motion.
+  const term = $('#heroTerm');
+  if (term && !reduce) {
+    const lines = $$('.ln', term);
+    lines.forEach((l) => { l.style.display = 'none'; });
+    let i = 0;
+    const next = () => {
+      if (i >= lines.length) return;
+      const line = lines[i++];
+      line.style.display = 'block';
+      if (!line.classList.contains('c')) { setTimeout(next, 380); return; }
+      const full = line.textContent;
+      const typed = d.createTextNode('');
+      const cursor = d.createElement('span');
+      cursor.className = 'cursor';
+      line.replaceChildren(typed, cursor);
+      let n = 0;
+      const type = () => {
+        n = Math.min(full.length, n + 3);
+        typed.nodeValue = full.slice(0, n);
+        if (n < full.length) { setTimeout(type, 16); return; }
+        cursor.remove();
+        setTimeout(next, 320);
+      };
+      type();
+    };
+    setTimeout(next, 500);
+  }
+
+  // Tabs: arrow keys move, the panel follows. Without script every panel stays visible.
+  $$('[role=tablist]').forEach((list) => {
+    const tabs = $$('[role=tab]', list);
+    const show = (tab, focus) => {
+      tabs.forEach((t) => {
+        const on = t === tab;
+        t.setAttribute('aria-selected', on);
+        t.tabIndex = on ? 0 : -1;
+        const panel = d.getElementById(t.getAttribute('aria-controls') ?? '');
+        if (panel) panel.hidden = !on;
+      });
+      if (focus) tab.focus();
+    };
+    tabs.forEach((t, i) => {
+      t.addEventListener('click', () => show(t));
+      t.addEventListener('keydown', (e) => {
+        const move = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+        if (move) { e.preventDefault(); show(tabs[(i + move + tabs.length) % tabs.length], true); }
+        if (e.key === 'Home') { e.preventDefault(); show(tabs[0], true); }
+        if (e.key === 'End') { e.preventDefault(); show(tabs[tabs.length - 1], true); }
+      });
+    });
+    if (tabs.length > 0) show(tabs[0]);
+  });
+
+  // Copy buttons: the clipboard API first, then a hidden textarea for browsers that refuse it.
+  const copyText = async (text) => {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
+    const ta = d.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    d.body.append(ta); ta.select();
+    let ok = false;
+    try { ok = d.execCommand('copy'); } catch { /* no clipboard */ }
+    ta.remove();
+    return ok;
+  };
+  $$('.copy').forEach((btn) => {
+    const label = btn.textContent;
+    btn.addEventListener('click', async () => {
+      const target = d.getElementById(btn.dataset.copy ?? '');
+      if (!target) return;
+      const ok = await copyText(target.textContent ?? '');
+      btn.textContent = ok ? 'copied' : 'select and copy';
+      btn.classList.add('hit');
+      if (status) status.textContent = ok ? 'Copied to the clipboard.' : 'Could not copy. Select the text and copy it.';
+      setTimeout(() => { btn.textContent = label; btn.classList.remove('hit'); if (status) status.textContent = ''; }, 1400);
+    });
+  });
+})();
+</script>
+</body>
+</html>
