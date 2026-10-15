@@ -338,7 +338,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
           <li class="stop"><b>clean</b><span>That review found nothing at medium or above.</span></li>
           <li><b>dev</b><span>The pull request is merged into <code>dev</code>.</span></li>
           <li><b>release</b><span>An open <code>dev</code> → <code>main</code> pull request lists it.</span></li>
-          <li><b>verified</b><span>The release's checks passed on the deployed <code>main</code>.</span></li>
+          <li><b>verified</b><span>The checks for the release passed on the deployed <code>main</code>.</span></li>
         </ol>
         <p class="stopnote">The example policy stops at rung 4. A person merges.</p>
       </div>
@@ -353,14 +353,21 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
     <ul class="never">
       <li>Merge into <code>main</code></li>
       <li>Turn on auto-merge</li>
-      <li>Force-push, or push to a base branch</li>
+      <li>Force-push</li>
+      <li>Push to a base branch</li>
       <li>Run a release</li>
       <li>Deploy to production</li>
       <li>Run anything on a fresh install<small>With no approval and no grant, every dispatch is held.</small></li>
     </ul>
     <div>
       <p>It refuses these before it checks authority, so a grant written too broadly cannot reach them.</p>
-      <p>One narrow merge exists and is off by default. The ticket loop can merge a pull request into <code>dev</code> only when the ticket's stop-line reaches the <code>dev</code> rung, an independent review of the current head is clean or has findings you accepted, <code>check-pr</code> reports the pull request ready, and you have granted <code>merge-dev</code>. A fresh install has no grants.</p>
+      <p>One narrow merge exists, and a fresh install has no grant for it. The ticket loop can merge a pull request into <code>dev</code> only when all of these are true:</p>
+      <ul class="facts" style="margin-top:12px">
+        <li>The ticket's stop-line reaches the <code>dev</code> rung.</li>
+        <li>An independent review of the current head is clean or has findings you accepted.</li>
+        <li><code>check-pr</code> reports the pull request ready.</li>
+        <li>You have granted <code>merge-dev</code>.</li>
+      </ul>
     </div>
   </div>
 </section>
@@ -389,7 +396,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
 <section class="chapter" id="console" data-ch>
   <div class="chip"><i></i>06 · The console</div>
   <h2>See what <em>needs you.</em></h2>
-  <p style="max-width:42em;margin-bottom:20px">The console is a local page, bound to loopback. It shows the loop's tickets and pull requests and what waits for your decision, with the evidence beside it. Every screenshot uses made-up data from the Larkspur example.</p>
+  <p style="max-width:42em;margin-bottom:20px">The console is a local page, bound to loopback. It shows the tickets and pull requests that the loop works on, and what waits for your decision, with the evidence beside it. Every screenshot uses made-up data from the Larkspur example.</p>
   <div class="tabs" role="tablist" aria-label="Console screenshots" id="consoleTabs">
     <button role="tab" id="t-board" aria-controls="p-board" aria-selected="true">Board</button>
     <button role="tab" id="t-inbox" aria-controls="p-inbox" aria-selected="false" tabindex="-1">Inbox</button>
@@ -397,19 +404,19 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
     <button role="tab" id="t-stale" aria-controls="p-stale" aria-selected="false" tabindex="-1">Stale read</button>
   </div>
   <figure class="panel" id="p-board" role="tabpanel" aria-labelledby="t-board">
-    <img src="assets/board-populated.png" width="1280" height="800" loading="lazy" alt="The console's Board view: a queue of decisions on the left, and the selected proposal with its evidence and next step on the right.">
+    <img src="assets/board-populated.png" width="1280" height="800" loading="lazy" alt="The Board view in the console: a queue of decisions on the left, and the selected proposal with its evidence and next step on the right.">
     <figcaption><b>Board.</b> A grouped queue of decisions beside the selected item's evidence and next step.</figcaption>
   </figure>
   <figure class="panel" id="p-inbox" role="tabpanel" aria-labelledby="t-inbox">
-    <img src="assets/inbox.png" width="1280" height="800" loading="lazy" alt="The console's Inbox view: each item that needs you, with what it waits for and one action such as Send answer, Dismiss fault or Apply shaped.">
+    <img src="assets/inbox.png" width="1280" height="800" loading="lazy" alt="The Inbox view in the console: each item that needs you, with what it waits for and one action such as Send answer, Dismiss fault or Apply shaped.">
     <figcaption><b>Inbox.</b> Every item that needs you, with what it waits for and its one action.</figcaption>
   </figure>
   <figure class="panel" id="p-empty" role="tabpanel" aria-labelledby="t-empty">
-    <img src="assets/board-nothing-to-do.png" width="1280" height="800" loading="lazy" alt="The console's Board view with no decisions waiting: the status reads Nothing to do.">
+    <img src="assets/board-nothing-to-do.png" width="1280" height="800" loading="lazy" alt="The Board view in the console with no decisions waiting: the status reads Nothing to do.">
     <figcaption><b>Nothing to do.</b> Shown only when the read is current and nothing is queued, blocked, active, or waiting on you.</figcaption>
   </figure>
   <figure class="panel" id="p-stale" role="tabpanel" aria-labelledby="t-stale">
-    <img src="assets/board-stale.png" width="1280" height="800" loading="lazy" alt="The console's Board view after a failed read: a banner says the read failed and the older snapshot is shown, and the status reads Unknown.">
+    <img src="assets/board-stale.png" width="1280" height="800" loading="lazy" alt="The Board view in the console after a failed read: a banner says the read failed and the older snapshot is shown, and the status reads Unknown.">
     <figcaption><b>Stale read.</b> A failed read keeps the last snapshot with its age and error, and no verdict comes from it.</figcaption>
   </figure>
 </section>
@@ -445,10 +452,11 @@ agentsys dispatch --task first-try --repo example-org/larkspur --class ci-repair
     <div class="cmd">
 <pre id="cmdAgent">Set up agent-system by following
 https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/AGENT-SETUP.md
-Do the numbered steps in order and run only the commands the guide gives.
+Do the numbered steps and run only the commands the guide gives.
 Ask me for the operator email and for the runtimes I will use; do not choose them.
-Do not approve work, create grants, dispatch tasks, or arm the loop. For each of
-those, tell me what it needs and stop. End by reporting the result of every step.</pre>
+Do not approve work, create grants, dispatch work under an approval or grant, or
+arm the loop. For each of those, tell me what it needs and stop. End by reporting
+the result of every step.</pre>
       <button class="copy" type="button" data-copy="cmdAgent" aria-label="Copy the prompt for your coding agent">copy</button>
     </div>
     <p class="small">The agent installs and checks the tool, then stops at every step that needs you. It never creates authority.</p>
@@ -564,7 +572,7 @@ those, tell me what it needs and stop. End by reporting the result of every step
       const ok = await copyText(target.textContent ?? '');
       btn.textContent = ok ? 'copied' : 'select and copy';
       btn.classList.add('hit');
-      status.textContent = ok ? 'Copied to the clipboard.' : 'Could not copy. Select the text and copy it.';
+      if (status) status.textContent = ok ? 'Copied to the clipboard.' : 'Could not copy. Select the text and copy it.';
       setTimeout(() => { btn.textContent = label; btn.classList.remove('hit'); }, 1400);
     });
   });
