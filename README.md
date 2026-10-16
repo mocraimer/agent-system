@@ -12,7 +12,7 @@ The limits that hold on every install:
 
 - It never merges into `main`, turns on auto-merge, force-pushes, pushes to a base branch, runs a release, or deploys to production. It refuses these before it checks authority, so a *grant* (standing permission for a class of work) written too broadly cannot cover them.
 - It runs nothing on a fresh install. With no *approval* (permission for one task) and no grant, every dispatch is held.
-- One narrow merge exists: with a grant you give, the ticket loop can merge a pull request into `dev`, never `main`. [When the loop may merge into dev](#when-the-loop-may-merge-into-dev) lists the conditions.
+- One narrow merge exists: with a grant you give, the ticket loop (the part that works your issues into pull requests) can merge a pull request into `dev`, never `main`. [When the loop may merge into dev](#when-the-loop-may-merge-into-dev) lists the conditions.
 
 ## Quick start
 
@@ -107,7 +107,7 @@ You need all of these:
 
 ### What each runtime needs
 
-Each runtime has its own setup, listed here by runtime id.
+Each runtime has its own setup, listed here by runtime id:
 
 | Runtime id | Runs on | Needs |
 |---|---|---|
@@ -156,7 +156,7 @@ npm test
 npm run test:ui      # browser tests (requires: npx playwright install chromium)
 ```
 
-`npm test` also checks this README and the agent guide against the command-line tool: every command and flag they show must exist, the safe ones run in a temporary state directory, and every link must resolve. [docs/READER-TASKS.md](docs/READER-TASKS.md) lists the tasks readers do with these documents. See [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
+`npm test` also checks this README and `docs/AGENT-SETUP.md` against the command-line tool: every command and flag they show must exist, the safe ones run in a temporary state directory, and every link must resolve. [docs/READER-TASKS.md](docs/READER-TASKS.md) lists the tasks readers do with these documents. See [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
 
 The console screenshots in `docs/console-screens/` come from `ui-tests/console.spec.ts` (`npm run test:ui`), which writes them to `test-results/console-screens/`. [docs/CONTROL-UI.md](docs/CONTROL-UI.md#verification) has the copy command. The page's link preview `site/og.png` and the opening picture `site/loop.png` come from `ui-tests/site.spec.ts`; its header has the copy commands.
 
