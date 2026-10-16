@@ -149,6 +149,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
 
 /* motion: the hero plays once on load, in order, and then rests as the still it already is */
 @keyframes arrive{from{opacity:0;transform:translateY(12px)}}
+@keyframes arrive-dim{from{opacity:.18;transform:translateY(12px)}}
 @keyframes reveal{from{clip-path:inset(-20px 100% -4px 0);opacity:.4}}
 @keyframes grow{from{width:0}}
 @keyframes land{from{box-shadow:0 0 0 0 rgba(255,180,84,.55)}to{box-shadow:0 0 0 18px rgba(255,180,84,0)}}
@@ -173,6 +174,8 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
   .strip .row{white-space:nowrap}
   .strip .card>:last-child{justify-self:end;text-align:right}
   .strip li:not(:last-child) .card::after{content:none}
+  /* In one column the steps still to come hold their rows, so they show faintly instead of leaving a gap. */
+  .play .strip li{animation-name:arrive-dim}
   .strip .when{display:none}
   .strip li:nth-child(3){margin-top:16px}
   .strip li:nth-child(3)::before{content:"while you're away";position:absolute;top:-16px;left:2px;font:500 10.5px/1 var(--mono);color:var(--agent)}
@@ -236,7 +239,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
         <span class="limit" id="limitLine"><b>your limit 70%</b></span>
         <span class="ramp"><span>ramp: last 24 h</span></span>
       </div>
-      <p class="m-ft"><b>Stops at your limit.</b> Turn on the weekly ramp, and the last hours before the reset can spend what you would lose.</p>
+      <p class="m-ft"><b>Stops at your limit.</b> Turn on the weekly ramp, and agents can use the room you would lose in the last hours before the reset.</p>
     </div>
   </div>
 
@@ -257,7 +260,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
     <li>Deploy to production</li>
     <li>Run anything on a fresh install<small>With no approval and no grant, every dispatch is held.</small></li>
   </ul>
-  <p class="never-note">It refuses these before it checks authority, so a grant written too broadly cannot reach them. One narrow merge exists: with a grant you give, the loop can merge a pull request into <code>dev</code>, never <code>main</code>.</p>
+  <p class="never-note">It refuses these before it checks authority, so a grant written too broadly cannot cover them. One narrow merge exists: with a grant you give, the loop can merge a pull request into <code>dev</code>, never <code>main</code>.</p>
 </section>
 
 <section class="chapter" id="install">

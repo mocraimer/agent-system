@@ -10,7 +10,7 @@
 ## Guides
 
 - [Operator guide](https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/OPERATING.md): Setup, authorizing work, subscription admission, the ticket loop, evidence, evaluation, and updating.
-- [Local MCP server](https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/MCP.md): The stdio MCP server, its seven tools, and what it cannot do.
+- [Local MCP server](https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/MCP.md): The stdio MCP (Model Context Protocol) server, its seven tools, and what it cannot do.
 - [Local control UI](https://raw.githubusercontent.com/mocraimer/agent-system/main/docs/CONTROL-UI.md): The operator console and what each action calls.
 - [Ticket loop example](https://raw.githubusercontent.com/mocraimer/agent-system/main/examples/ticket-loop/README.md): A worked example of running the loop against a made-up product repository.
 

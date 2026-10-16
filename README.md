@@ -8,13 +8,15 @@ Your coding agents work your GitHub issues while you're away. They work on the s
 
 ## What it never does
 
-- It never merges into `main`, turns on auto-merge, force-pushes, pushes to a base branch, runs a release, or deploys to production. It refuses these before it checks authority, so a *grant* (standing permission for a class of work) written too broadly cannot reach them.
+The limits that hold on every install:
+
+- It never merges into `main`, turns on auto-merge, force-pushes, pushes to a base branch, runs a release, or deploys to production. It refuses these before it checks authority, so a *grant* (standing permission for a class of work) written too broadly cannot cover them.
 - It runs nothing on a fresh install. With no *approval* (permission for one task) and no grant, every dispatch is held.
 - One narrow merge exists: with a grant you give, the ticket loop can merge a pull request into `dev`, never `main`. [When it may](#when-the-loop-may-merge-into-dev) says how.
 
 ## Quick start
 
-Needs Node.js 22.12 or newer and one signed-in runtime, the agent that does the work. You are the *operator*, the person who owns the installation. [Before you start](#before-you-start) lists the rest.
+Needs Node.js 22.12 or newer and one signed-in runtime, the agent that does the work. You are the *operator*, the person who owns the installation. [Before you start](#before-you-start) lists the rest. The commands:
 
 ```bash
 git clone https://github.com/mocraimer/agent-system.git
@@ -32,7 +34,7 @@ agentsys dispatch --task first-try --repo example-org/larkspur --class ci-repair
 
 `npm install -g .` puts `agentsys` and `agentsys-mcp` on your `PATH`. If it fails with a permissions error, skip it and write `node dist/cli/main.js` wherever this guide says `agentsys`.
 
-Each command should give this result:
+Each command gives this result:
 
 - `init` exits 0 and prints `Operator set to you@example.com. No autonomy grants are active.`
 - `readiness --runtime claude-local` exits 0 and prints `claude-local: ready`, or exits 1 and prints `claude-local: NOT READY` with what is missing. Swap in the runtime you will use. Without `--runtime` it checks all four and exits 1 while any is not set up.
@@ -58,17 +60,19 @@ The steps are in [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md). The `llms.txt` file
 
 ## What you can do
 
+Each row is a job, with the command that starts it and the guide to read next:
+
 | You can | Start with | Read |
 |---|---|---|
 | Work your repository's issues with the ticket loop: shape them, open pull requests for the ones you grant, review and fix them, open a release pull request, and verify the release | `agentsys loop arm --repo <path>` | [Ticket loop example](examples/ticket-loop/README.md), [The ticket loop](docs/OPERATING.md#the-ticket-loop) |
 | Run one approved task on the runtime you choose | `agentsys approve`, then `agentsys dispatch` | [Approving one task](docs/OPERATING.md#approving-one-task) |
 | Repair CI failures: a failed CI run becomes a job, and a standing grant lets matching repairs start without a new approval each time | `agentsys intake --event failure.json` | [Feeding events in](docs/OPERATING.md#feeding-events-in) |
 | Watch and steer in a local console in your browser, or print the same board in a terminal | `agentsys ui --repo <path>` | [Local control UI](docs/CONTROL-UI.md) |
-| Connect a local agent to a stdio MCP server that reads status, jobs, usage, readiness, evaluation, and evidence, and can dispatch inside authority you already gave | `agentsys-mcp` | [Local MCP server](docs/MCP.md) |
+| Connect a local agent to a stdio MCP (Model Context Protocol) server that reads status, jobs, usage, readiness, evaluation, and evidence, and can dispatch inside authority you already gave | `agentsys-mcp` | [Local MCP server](docs/MCP.md) |
 | Keep evidence for every run, count outcomes, and replay frozen cases to compare configurations | `agentsys scorecards` | [Evidence and evaluation](docs/OPERATING.md#evidence-and-evaluation) |
 | Hold work to your subscription's allowance and to a limit on paid provider calls | `agentsys usage`, `agentsys ledger` | [Subscription admission](docs/OPERATING.md#subscription-admission) |
 
-## When the loop may merge into `dev`
+## When the loop may merge into dev
 
 The ticket loop can merge a pull request into `dev` only when all of these are true:
 
@@ -95,7 +99,7 @@ request ──► authority ──► admission ──► runtime ──► evid
 
 ## Before you start
 
-You need:
+You need all of these:
 
 - Node.js 22.12 or newer.
 - At least one runtime, signed in. [What each runtime needs](#what-each-runtime-needs) lists the requirements.
@@ -131,6 +135,8 @@ Two runtimes need a step from you:
 `agentsys loop arm` and `agentsys loop disarm` install and remove a systemd user service, so they need Linux with systemd. On macOS, Windows, or Linux without systemd, run a pass yourself with `agentsys loop --repo <path> --once`.
 
 ## Documentation
+
+These documents go deeper:
 
 - **[docs/OPERATING.md](docs/OPERATING.md)** — the operator guide: setup, authorizing work, model and effort selection, subscription admission, the paid-call ledger, evidence, evaluation, the ticket loop, updating and rollback, and cleanup.
 - **[docs/MCP.md](docs/MCP.md)** — the local stdio MCP server: client setup, its seven tools, and the loopback-only control UI.
