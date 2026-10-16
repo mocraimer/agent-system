@@ -4,7 +4,7 @@ These are the tasks a reader comes to the agent-system documents to do. Each ent
 
 ## How a task is walked
 
-A reader with fresh context walks one task at a time: no memory of this repository, only the documents the task names. The reader works in a clean clone with a temporary state directory (`AGENTSYS_STATE` set to an empty directory), never runs `agentsys usage` (it prints a real account id), and records where it got stuck. A task passes when the reader ends up able to do what the entry says without a step the documents leave out. T9 is the one exception: its entry says how it is walked.
+A reader with fresh context walks one task at a time: no memory of this repository, only the documents the task names. The reader works in a clean clone with a temporary state directory (`AGENTSYS_STATE` set to an empty directory). The reader never runs `agentsys usage` (it prints a real account id) and records where it got stuck. A task passes when the reader ends up able to do what the entry says without a step the documents leave out. T9 is the one exception: its entry says how it is walked.
 
 ## Statuses
 
@@ -79,5 +79,5 @@ A task carries one of three statuses:
 - **Reader:** A developer who already uses coding agents, arriving from a link someone sent, who looks at a first screen for about five seconds.
 - **Documents:** [site/index.html](../site/index.html), [README.md](../README.md)
 - **Ends up able to:** Say in one sentence that (a) their coding agents turn their GitHub issues into reviewed pull requests, (b) on the Claude or OpenAI subscription they already pay for, up to a limit they set, and (c) they do the merge.
-- **How it is walked:** The reader sees only screenshots of the first screen, never the source, and answers in one sentence before reading anything else. The screenshots are the page at 1280×800 and at 390×740, each at 2 seconds after load, at rest, and at rest with reduced motion, and the README's top as GitHub renders it at 1280×800. `npm run test:ui` writes the page's screenshots to `test-results/site-first-screen/`.
+- **How it is walked:** The reader sees only screenshots of the first screen, never the source, and answers in one sentence before reading anything else. The screenshots are the page at 1280×800 and at 390×740, each at 2 seconds after load, at rest, and at rest with reduced motion. The last screenshot is the top of the README as GitHub renders it at 1280×800. `npm run test:ui` writes the page's screenshots to `test-results/site-first-screen/`.
 - **Status:** verified (2026-10-16); not driven: a person glancing at the live page, which waits for the merge and the publish; walked by fresh-context readers on screenshots of the page at 1280×800 and 390×740, each at 2 seconds and at rest, and of the README top on GitHub

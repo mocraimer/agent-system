@@ -12,11 +12,11 @@ The limits that hold on every install:
 
 - It never merges into `main`, turns on auto-merge, force-pushes, pushes to a base branch, runs a release, or deploys to production. It refuses these before it checks authority, so a *grant* (standing permission for a class of work) written too broadly cannot cover them.
 - It runs nothing on a fresh install. With no *approval* (permission for one task) and no grant, every dispatch is held.
-- One narrow merge exists: with a grant you give, the ticket loop can merge a pull request into `dev`, never `main`. [When it may](#when-the-loop-may-merge-into-dev) says how.
+- One narrow merge exists: with a grant you give, the ticket loop can merge a pull request into `dev`, never `main`. [When the loop may merge into dev](#when-the-loop-may-merge-into-dev) lists the conditions.
 
 ## Quick start
 
-Needs Node.js 22.12 or newer and one signed-in runtime, the agent that does the work. You are the *operator*, the person who owns the installation. [Before you start](#before-you-start) lists the rest. The commands:
+Needs Node.js 22.12 or newer and one signed-in runtime, the tool that runs the work: Claude Code, Pi, Codex cloud, or Claude Code web. You are the *operator*, the person who owns the installation. [Before you start](#before-you-start) lists the rest. Run these commands:
 
 ```bash
 git clone https://github.com/mocraimer/agent-system.git
@@ -147,6 +147,8 @@ These documents go deeper:
 
 ## Development
 
+Check the project with these commands:
+
 ```bash
 npm run typecheck
 npm run lint
@@ -156,7 +158,7 @@ npm run test:ui      # browser tests (requires: npx playwright install chromium)
 
 `npm test` also checks this README and the agent guide against the CLI: every command and flag they show must exist, the safe ones run in a temporary state directory, and every link must resolve. [docs/READER-TASKS.md](docs/READER-TASKS.md) lists the tasks readers do with these documents. See [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
 
-The console screenshots in `docs/console-screens/` come from `ui-tests/console.spec.ts` (`npm run test:ui`), which writes them to `test-results/console-screens/`. [docs/CONTROL-UI.md](docs/CONTROL-UI.md#verification) has the copy command. The page's link preview `site/og.png` and the picture above `site/loop.png` come from `ui-tests/site.spec.ts`; its header has the copy commands.
+The console screenshots in `docs/console-screens/` come from `ui-tests/console.spec.ts` (`npm run test:ui`), which writes them to `test-results/console-screens/`. [docs/CONTROL-UI.md](docs/CONTROL-UI.md#verification) has the copy command. The page's link preview `site/og.png` and the opening picture `site/loop.png` come from `ui-tests/site.spec.ts`; its header has the copy commands.
 
 ## License
 
