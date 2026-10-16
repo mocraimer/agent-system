@@ -17,6 +17,7 @@ afterEach(() => {
 const V1 = { coordinator: 'sha-aaa', adapters: { 'pi-local': 'a1' }, prompts: 'prompts-1' };
 const V2 = { coordinator: 'sha-bbb', adapters: { 'pi-local': 'a2' }, prompts: 'prompts-2' };
 
+// Holds the decision in docs/adr/20261015-activation-needs-merge-and-operator.md.
 describe('exercising a candidate is not activating it', () => {
   it('records an unmerged build without touching the active version', () => {
     box = sandbox();
@@ -60,6 +61,7 @@ describe('exercising a candidate is not activating it', () => {
   });
 });
 
+// Holds the decision in docs/adr/20261015-activation-needs-merge-and-operator.md.
 describe('activation and rollback', () => {
   it('activates with an operator and a confirmed merge', () => {
     box = sandbox();
@@ -96,6 +98,7 @@ describe('activation and rollback', () => {
   });
 });
 
+// Holds the decision in docs/adr/20261015-activation-needs-merge-and-operator.md.
 describe('a run keeps the version it started with', () => {
   it('does not pick up new control code mid-run', () => {
     box = sandbox();

@@ -112,6 +112,7 @@ describe('the loop reads its policy from the store configuration', () => {
     assert.throws(() => parseStoreConfig(bad), /not a runtime the coordinator has/);
   });
 
+  // Holds the decision in docs/adr/20261014-consumer-values-live-in-configuration.md.
   it('refuses a store configuration with no marker prefix, so a loop cannot run blind to its own comments', () => {
     assert.throws(() => parseStoreConfig(fixtureStoreConfig({ protocolRows: ['| release branch | main |'] })), /needs a "marker prefix" row/);
     assert.throws(() => parseStoreConfig(fixtureStoreConfig({ protocolRows: ['| marker prefix | Not A Prefix |'] })), /lower-case letters, digits and hyphens/);

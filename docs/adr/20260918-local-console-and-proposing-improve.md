@@ -45,6 +45,15 @@ granted.
 - The console works only on the machine that runs the coordinator.
 - Improvements wait for a person to merge them.
 
+## Enforced by
+partly — `src/ui/server.test.ts` "requires a bootstrap session and one-time token" holds the
+loopback-only bind and the one-time token; `src/loop/improve.test.ts` "drafts a prompt edit, replays
+the frozen case before and after, and opens then updates one pull request" holds that the improve
+stage only proposes a prompt change, on one branch and one pull request, leaving the base and the
+live store configuration untouched. Not held by any check: that the console reads through the
+operator's own `gh`, that it keeps only the last snapshot, and the improve stage's tier-proposal
+path.
+
 ## Source
 - Retroactive — recorded first as a short decision note on 2026-09-18, moved into this format when
   the project adopted ADRs.

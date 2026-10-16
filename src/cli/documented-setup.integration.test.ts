@@ -183,6 +183,7 @@ describe('generic system code assumes no particular consumer', () => {
     assert.doesNotMatch(intake.stdout, /base/i, 'no required PR base was invented for it');
   });
 
+  // Holds the decision in docs/adr/20261014-consumer-values-live-in-configuration.md and docs/adr/20261014-prompt-proposals-need-a-named-repository.md.
   it('holds no required base or read-only project in a clean state directory', async () => {
     await agentsys('init', '--operator', OP);
     const floor = JSON.parse((await agentsys('floor', '--show')).stdout) as { prBases: object; readOnlyProjects: unknown[] };

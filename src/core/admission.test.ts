@@ -114,6 +114,7 @@ describe('thresholds', () => {
   });
 });
 
+// Holds the decision in docs/adr/20261015-subscription-windows-are-declared.md.
 describe('unusable readings never become headroom', () => {
   it('blocks when usage cannot be read', async () => {
     box = sandbox();
@@ -336,6 +337,7 @@ describe('the decision is shown, not just made', () => {
 });
 
 
+// Holds the decision in docs/adr/20261015-subscription-windows-are-declared.md.
 describe('a subscription metered on one window', () => {
   // The basis is the operator's ruling of 2026-09-09 — "its true codex does not
   // have hourly and has only weekly usage" — not a vendor document and not the
@@ -457,6 +459,7 @@ describe('a subscription metered on one window', () => {
   });
 });
 
+// Holds the decision in docs/adr/20261015-subscription-windows-are-declared.md.
 describe('a policy stored before windows were declared', () => {
   it('does not read as "no window applies"', () => {
     // An empty list would admit work against nothing at all, which is the most

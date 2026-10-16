@@ -119,6 +119,7 @@ function mutationInit(sessionInfo: { cookie: string; csrf: string }, body: unkno
 }
 
 describe('loopback UI authentication', () => {
+  // Holds the decision in docs/adr/20260918-local-console-and-proposing-improve.md.
   it('requires a bootstrap session and one-time token', async () => {
     await start();
     const address = handle!.server.address();

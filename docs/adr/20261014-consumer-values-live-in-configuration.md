@@ -56,6 +56,15 @@ decided every item the same way as the old build.
   code written for one product: a check's special exit meanings beyond pass, fail and blocked are
   no longer described in its result.
 
+## Enforced by
+partly — `src/core/authority.test.ts` "the floor: constrained PR bases" and "the floor: read-only
+projects" hold the base branch and read-only projects in the floor;
+`src/cli/documented-setup.integration.test.ts` "holds no required base or read-only project in a clean
+state directory" holds that the code carries no consumer's values; `src/loop/loop.test.ts` "refuses a
+store configuration with no marker prefix, so a loop cannot run blind to its own comments" holds the
+required marker prefix, and its post-deploy tests hold the deploy workflow and release checks. Not
+held by any check: a configured release branch other than `main`, and the deploy scope command.
+
 ## Source
 - Session: open-source release investigation and manifest, 2026-10-14
 - Related: 20261014-default-queue-rules-built-in

@@ -40,6 +40,12 @@ repository's own copy still wins.
 - A change to the convention's default rules now needs a coordinator release for repositories that
   rely on the default.
 
+## Enforced by
+`src/loop/example.test.ts` queue-rule tests: "are the built-in ones, under the configured prefix,
+when the target ships no modules", "are the target repository's own when it ships both modules",
+"refuse a target that ships one module without the other" and "name the export a target module is
+missing".
+
 ## Source
 - Session: open-source release investigation and manifest, 2026-10-14
 - Related: 20261014-consumer-values-live-in-configuration

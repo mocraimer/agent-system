@@ -142,6 +142,7 @@ describe('attaching to a cloud session', () => {
     assert.equal(JSON.parse(readFileSync(kept, 'utf8')).session_id, 'session_01HWA4');
   });
 
+  // Holds the decision in docs/adr/20261015-unconfirmed-run-settings-are-unknown.md.
   it('records the effective model and effort as unknown, not as what was asked for', async () => {
     // The acknowledgement reports nothing about what the vendor session ran with,
     // so echoing "opus"/"high" back would dress a request up as a confirmation.

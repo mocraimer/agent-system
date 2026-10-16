@@ -13,6 +13,7 @@ import { readFloor } from './floor.js';
  * reach the things the contract puts outside every task's reach, so these are
  * checked after a match rather than folded into matching — an operator who writes
  * a broad grant still cannot accidentally authorize a merge or a production write.
+ * See docs/adr/20261015-unsafe-actions-refused-before-authority.md.
  */
 export const FORBIDDEN_ACTIONS = ['merge', 'auto-merge', 'force-push', 'release', 'deploy-prod'] as const;
 

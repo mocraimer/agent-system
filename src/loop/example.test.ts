@@ -86,6 +86,7 @@ describe('the example ticket loop', () => {
   });
 });
 
+// Holds the decision in docs/adr/20261014-default-queue-rules-built-in.md.
 describe('queue rules', () => {
   const ref = 'origin/dev';
 
