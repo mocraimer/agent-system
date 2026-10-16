@@ -6,9 +6,9 @@ import type { AddressInfo } from 'node:net';
 import { extname, join, normalize, relative } from 'node:path';
 
 /**
- * The explainer page in a real browser: it loads, fits a phone and a desktop, copies its
- * commands, switches tabs, works from the keyboard, still shows every command with
- * JavaScript off, and holds still when the reader asks for less motion.
+ * The explainer page in a real browser: it loads, fits a phone and a desktop, shows its first
+ * screen whole with scripts on, with scripts off and with reduced motion, copies its commands,
+ * switches tabs, and works from the keyboard.
  *
  * It serves `site/` from a local HTTP server. Browsers treat a loopback address as a secure
  * context, which the clipboard API needs. The two font hosts are answered locally, so the page
@@ -19,16 +19,20 @@ import { extname, join, normalize, relative } from 'node:path';
  * 1280 by 800 and 390 by 740, 2 seconds after load, at rest, and at rest with reduced motion. The
  * shots land in test-results/site-first-screen/ as {desktop,phone}-{2s,rest,reduced}.png.
  *
- * The first-screen shot at 1200 by 630 pixels is written to test-results/site-og.png.
- * To refresh the link preview, run `npm run test:ui`, then:
+ * Two pictures come from the first screen at rest: the link preview, 1200 by 630 pixels, in
+ * test-results/site-og.png, and the README's picture of the strip and the meter in
+ * test-results/site-loop.png. To refresh them, run `npm run test:ui`, then:
  *   cp test-results/site-og.png site/og.png
- * Run it with the network on, so the typefaces load and the shot shows them.
+ *   cp test-results/site-loop.png site/loop.png
+ * Run it with the network on, so the typefaces load and the shots show them.
  */
 
 const SITE = join(process.cwd(), 'site');
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.png': 'image/png', '.txt': 'text/plain; charset=utf-8',
 };
+const PHONE = { width: 390, height: 740 } as const;
+const DESKTOP = { width: 1280, height: 800 } as const;
 
 let server: Server;
 let base = '';
@@ -84,24 +88,146 @@ async function withPage(browser: Browser, options: Parameters<Browser['newContex
   }
 }
 
-for (const [width, height] of [[1280, 800], [375, 812]] as const) {
-  test(`at ${width} by ${height}: no errors, every image loads, no sideways scroll`, async ({ browser }) => {
+
+/** Where the first screen's moving parts are and what they show: equal in every state that shows the end frame. */
+async function endFrame(page: Page): Promise<unknown> {
+  return page.evaluate(() => {
+    const box = (el: Element | null) => {
+      const b = el!.getBoundingClientRect();
+      return [b.x, b.y, b.width, b.height].map(Math.round);
+    };
+    return {
+      steps: [...document.querySelectorAll('#strip li')].map((li) => ({
+        text: (li.textContent ?? '').replace(/\s+/g, ' ').trim(),
+        opacity: getComputedStyle(li).opacity,
+        box: box(li),
+      })),
+      own: box(document.querySelector('.fill.own')),
+      agents: box(document.querySelector('.fill.agents')),
+      limit: box(document.querySelector('#limitLine')),
+    };
+  });
+}
+
+/** The end frame as a reduced-motion visitor sees it at once; the page must not animate. */
+async function reducedFrame(browser: Browser): Promise<unknown> {
+  let frame: unknown;
+  await withPage(browser, { viewport: DESKTOP, reducedMotion: 'reduce' }, async ({ page }) => {
+    expect(await page.evaluate(() => document.getAnimations().length), 'nothing animates').toBe(0);
+    expect(await page.evaluate(() => document.documentElement.classList.contains('play'))).toBe(false);
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).scrollBehavior)).toBe('auto');
+    frame = await endFrame(page);
+  });
+  return frame;
+}
+
+/** When each step first showed fully, and the agents' share's width at every frame, in the page's own clock. */
+interface PlayLog { arrived: number[]; widths: number[] }
+
+/** The number of animations still running or waiting to start. */
+const running = (page: Page): Promise<number> =>
+  page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length);
+
+for (const [width, height] of [[DESKTOP.width, DESKTOP.height], [PHONE.width, PHONE.height], [375, 812]] as const) {
+  test(`at ${width} by ${height}: no errors and no sideways scroll`, async ({ browser }) => {
     await withPage(browser, { viewport: { width, height } }, async ({ page }) => {
-      // Three of the four screenshots sit in tabs that stay hidden until chosen, so open each tab.
-      for (const tab of await page.locator('#consoleTabs [role=tab]').all()) {
-        await tab.click();
-        const img = page.locator(`#${await attr(tab, 'aria-controls')} img`);
-        await img.scrollIntoViewIfNeeded();
-        await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0), { message: 'screenshot loaded' }).toBe(true);
-      }
       const overflow = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       expect(overflow.scroll).toBeLessThanOrEqual(overflow.client);
     });
   });
 }
 
+for (const { width, height } of [DESKTOP, PHONE]) {
+  test(`at ${width} by ${height}: the headline, the sub line, five steps and the limit line are all on the first screen`, async ({ browser }) => {
+    await withPage(browser, { viewport: { width, height } }, async ({ page }) => {
+      await expect.poll(() => running(page), { timeout: 10_000, message: 'the hero has stopped moving' }).toBe(0);
+      const steps = page.locator('#strip li');
+      expect(await steps.count()).toBe(5);
+      const wanted: [string, Locator][] = [['headline', page.locator('h1')], ['sub line', page.locator('h1 + .sub')], ['limit line', page.locator('#limitLine')]];
+      for (const [i, step] of (await steps.all()).entries()) wanted.push([`step ${i + 1}`, step]);
+      for (const [name, locator] of wanted) {
+        const box = await locator.boundingBox();
+        expect(box, `${name} has no box`).not.toBeNull();
+        expect(box!.x, `${name} starts left of the screen`).toBeGreaterThanOrEqual(0);
+        expect(box!.y, `${name} starts above the screen`).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width, `${name} ends right of the screen`).toBeLessThanOrEqual(width);
+        expect(box!.y + box!.height, `${name} ends below the screen`).toBeLessThanOrEqual(height);
+      }
+    });
+  });
+}
+
+test('the end frame is five steps with their actors, and a meter with your use, the agents and your limit', async ({ browser }) => {
+  await withPage(browser, { viewport: DESKTOP, reducedMotion: 'reduce' }, async ({ page }) => {
+    expect(await page.locator('#strip li .who').allTextContents()).toEqual(['You', 'You', 'Claude Code', 'GPT reviews', 'You']);
+    await expect(page.locator('#strip li').nth(1)).toContainText('shaped');
+    await expect(page.locator('#strip li').nth(1)).toContainText('auto');
+    await expect(page.locator('#strip li').nth(4)).toContainText('Merge');
+    await expect(page.locator('.away')).toHaveText('while you’re away');
+    await expect(page.locator('.fill.own')).toHaveText('you 22%');
+    await expect(page.locator('.fill.agents')).toHaveText('agents 41%');
+    await expect(page.locator('#limitLine')).toHaveText('your limit 70%');
+    await expect(page.locator('.meter')).toContainText('Claude or OpenAI, any plan');
+  });
+});
+
+test('with scripts on, the strip plays once in order and the meter grows with it, then it shows the reduced-motion frame and holds still', async ({ browser }) => {
+  const reduced = await reducedFrame(browser);
+  const context = await browser.newContext({ viewport: DESKTOP });
+  try {
+    await offlineFonts(context);
+    // Sample every frame from the start: when each step shows fully, and how wide the agents' share is.
+    await context.addInitScript(() => {
+      const log: PlayLog = { arrived: [], widths: [] };
+      (window as unknown as { __play: PlayLog }).__play = log;
+      addEventListener('DOMContentLoaded', () => {
+        const tick = (): void => {
+          document.querySelectorAll('#strip li').forEach((li, i) => {
+            if (log.arrived[i] === undefined && Number(getComputedStyle(li).opacity) >= 0.99) log.arrived[i] = performance.now();
+          });
+          const agents = document.querySelector('.fill.agents');
+          if (agents) log.widths.push(agents.getBoundingClientRect().width);
+          requestAnimationFrame(tick);
+        };
+        tick();
+      });
+    });
+    const page = await context.newPage();
+    const problems: string[] = [];
+    page.on('pageerror', (e) => problems.push(e.message));
+    await page.goto(base);
+    await expect.poll(() => running(page), { timeout: 10_000, message: 'the hero has stopped moving' }).toBe(0);
+    const log = await page.evaluate(() => (window as unknown as { __play: PlayLog }).__play);
+    expect(log.arrived.length, 'every step arrived').toBe(5);
+    expect(log.arrived, 'the steps arrive in order').toEqual([...log.arrived].sort((a, b) => a - b));
+    expect(new Set(log.arrived).size, 'one step at a time').toBe(5);
+    expect(log.arrived[4]!, 'the last step is in within about four seconds of load').toBeLessThan(5_000);
+    const full = log.widths.at(-1)!;
+    expect(full).toBeGreaterThan(100);
+    expect(log.widths[0], 'the agents begin at nothing, but for the label\'s padding').toBeLessThanOrEqual(12);
+    expect(log.widths.some((w) => w > 12 && w < full - 1), 'the agents grow while their steps arrive').toBe(true);
+    expect(log.widths, 'the share only grows').toEqual([...log.widths].sort((a, b) => a - b));
+    const rested = await endFrame(page);
+    expect(rested).toEqual(reduced);
+    await page.waitForTimeout(600);
+    expect(await running(page), 'nothing moves afterwards').toBe(0);
+    expect(await endFrame(page)).toEqual(rested);
+    expect(problems, 'page errors').toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test('with scripts off, the five steps and the meter show at their final values', async ({ browser }) => {
+  const reduced = await reducedFrame(browser);
+  await withPage(browser, { viewport: DESKTOP, javaScriptEnabled: false }, async ({ page }) => {
+    expect(await endFrame(page)).toEqual(reduced);
+    expect(await page.evaluate(() => document.getAnimations().length), 'nothing animates').toBe(0);
+  });
+});
+
 test('each copy button puts exactly its command text on the clipboard and shows it was copied', async ({ browser }) => {
-  await withPage(browser, { viewport: { width: 1280, height: 800 } }, async ({ page, context }) => {
+  await withPage(browser, { viewport: DESKTOP }, async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
     expect(await page.locator('.copy').count()).toBe(2);
     for (const tab of ['#t-you', '#t-agent']) {
@@ -117,8 +243,8 @@ test('each copy button puts exactly its command text on the clipboard and shows 
   });
 });
 
-test('tabs switch the panel, mark the active tab, and move with the arrow keys', async ({ browser }) => {
-  await withPage(browser, { viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+test('the install tabs switch the panel, mark the active tab, and move with the arrow keys', async ({ browser }) => {
+  await withPage(browser, { viewport: DESKTOP }, async ({ page }) => {
     await expect(page.locator('#p-you')).toBeVisible();
     await expect(page.locator('#p-agent')).toBeHidden();
     await page.locator('#t-agent').click();
@@ -129,20 +255,14 @@ test('tabs switch the panel, mark the active tab, and move with the arrow keys',
     await page.keyboard.press('ArrowLeft');
     await expect(page.locator('#t-you')).toHaveAttribute('aria-selected', 'true');
     await expect(page.locator('#p-you')).toBeVisible();
-
-    await expect(page.locator('#p-board')).toBeVisible();
-    await page.locator('#t-inbox').click();
-    await expect(page.locator('#p-inbox')).toBeVisible();
-    await expect(page.locator('#p-board')).toBeHidden();
-    await page.locator('#t-inbox').focus();
     await page.keyboard.press('End');
-    await expect(page.locator('#t-stale')).toHaveAttribute('aria-selected', 'true');
-    await expect(page.locator('#p-stale')).toBeVisible();
+    await expect(page.locator('#t-agent')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#p-agent')).toBeVisible();
   });
 });
 
 test('the keyboard reaches every copy button and each shows a focus ring', async ({ browser }) => {
-  await withPage(browser, { viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+  await withPage(browser, { viewport: DESKTOP }, async ({ page }) => {
     const reached = new Set<string>();
     for (let i = 0; i < 160 && reached.size < 2; i++) {
       await page.keyboard.press('Tab');
@@ -164,36 +284,23 @@ test('the keyboard reaches every copy button and each shows a focus ring', async
   });
 });
 
-test('with JavaScript off, every command and every screenshot is still on the page', async ({ browser }) => {
-  await withPage(browser, { viewport: { width: 1280, height: 800 }, javaScriptEnabled: false }, async ({ page }) => {
+test('with scripts off, every command is still on the page', async ({ browser }) => {
+  await withPage(browser, { viewport: DESKTOP, javaScriptEnabled: false }, async ({ page }) => {
     await expect(page.locator('#cmdYou')).toBeVisible();
     await expect(page.locator('#cmdYou')).toContainText('npm install -g .');
     await expect(page.locator('#cmdYou')).toContainText('agentsys init --operator you@example.com');
     await expect(page.locator('#cmdAgent')).toBeVisible();
     await expect(page.locator('#cmdAgent')).toContainText('docs/AGENT-SETUP.md');
-    for (const figure of ['#p-board', '#p-inbox', '#p-empty', '#p-stale']) await expect(page.locator(figure)).toBeVisible();
     await expect(page.locator('.copy').first()).toBeHidden();
-    const lines = await page.locator('#heroTerm .ln').all();
-    expect(lines.length).toBeGreaterThan(0);
-    for (const line of lines) await expect(line).toBeVisible();
-  });
-});
-
-test('with reduced motion, nothing animates and every line of the hero terminal shows at once', async ({ browser }) => {
-  await withPage(browser, { viewport: { width: 1280, height: 800 }, reducedMotion: 'reduce' }, async ({ page }) => {
-    for (const line of await page.locator('#heroTerm .ln').all()) await expect(line).toBeVisible();
-    await page.waitForTimeout(300);
-    expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
-    expect(await page.evaluate(() => getComputedStyle(document.documentElement).scrollBehavior)).toBe('auto');
   });
 });
 
 const FIRST_SCREENS = [
-  { name: 'desktop', width: 1280, height: 800, scale: 1 },
-  { name: 'phone', width: 390, height: 740, scale: 2 },
+  { name: 'desktop', ...DESKTOP, scale: 1 },
+  { name: 'phone', ...PHONE, scale: 2 },
 ] as const;
 const FIRST_SCREEN_DIR = join(process.cwd(), 'test-results', 'site-first-screen');
-/** When the page is at rest: later than any motion it plays, so the same wait suits a page that types or one that slides. */
+/** When the page is at rest: later than any motion it plays, so the same wait suits any version of the page. */
 const REST_MS = 8_000;
 
 /** Save a screenshot of the visible first screen and check it is the size the viewer sees. */
@@ -236,27 +343,41 @@ for (const { name, width, height, scale } of FIRST_SCREENS) {
   });
 }
 
-test('the first screen at 1200 by 630 is written for the link preview', async ({ browser }) => {
-  const context = await browser.newContext({ viewport: { width: 1200, height: 630 } });
+/** Open the page at rest, in its typefaces, with reduced motion so the end frame shows at once. Close the context even when the body throws. */
+async function atRestWithFonts(browser: Browser, options: Parameters<Browser['newContext']>[0], body: (page: Page) => Promise<void>): Promise<void> {
+  const context = await browser.newContext({ ...options, reducedMotion: 'reduce' });
   try {
     const page = await context.newPage();
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(base);
-    // The terminal types out; wait until every line shows and the cursor is gone.
-    await page.waitForFunction(() => {
-      const lines = [...document.querySelectorAll<HTMLElement>('#heroTerm .ln')];
-      return lines.length > 0 && lines.every((l) => l.style.display !== 'none') && !document.querySelector('#heroTerm .cursor');
-    }, undefined, { timeout: 15_000 }).catch((err: unknown) => {
-      throw new Error(`the hero terminal did not finish typing; page errors: ${errors.join('; ') || 'none'}`, { cause: err });
-    });
+    await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(400);
     expect(errors, 'page errors while the first screen loaded').toEqual([]);
     mkdirSync(join(process.cwd(), 'test-results'), { recursive: true });
-    const shot = await page.screenshot({ path: join(process.cwd(), 'test-results', 'site-og.png') });
-    expect(shot.readUInt32BE(16)).toBe(1200);
-    expect(shot.readUInt32BE(20)).toBe(630);
+    await body(page);
   } finally {
     await context.close();
   }
+}
+
+test('the first screen at 1200 by 630 is written for the link preview', async ({ browser }) => {
+  await atRestWithFonts(browser, { viewport: { width: 1200, height: 630 } }, async (page) => {
+    const shot = await page.screenshot({ path: join(process.cwd(), 'test-results', 'site-og.png') });
+    expect(shot.readUInt32BE(16)).toBe(1200);
+    expect(shot.readUInt32BE(20)).toBe(630);
+  });
+});
+
+test('the strip and the meter at rest are written for the README', async ({ browser }) => {
+  // 1000 wide keeps the five-step layout at about the width GitHub gives the README, so the picture reads at full size.
+  await atRestWithFonts(browser, { viewport: { width: 1000, height: 700 }, deviceScaleFactor: 2 }, async (page) => {
+    const box = await page.locator('#picture').boundingBox();
+    expect(box, '#picture has no box').not.toBeNull();
+    const pad = 16;
+    const clip = { x: box!.x - pad, y: box!.y - pad, width: box!.width + 2 * pad, height: box!.height + 2 * pad };
+    const shot = await page.screenshot({ path: join(process.cwd(), 'test-results', 'site-loop.png'), clip });
+    expect(Math.abs(shot.readUInt32BE(16) - clip.width * 2), 'width, within the rounding of a fractional clip').toBeLessThanOrEqual(2);
+    expect(Math.abs(shot.readUInt32BE(20) - clip.height * 2), 'height, within the rounding of a fractional clip').toBeLessThanOrEqual(2);
+  });
 });

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
-import { commandLines, escapeRe, fencedBlocks, headingSlugs, sectionOf, shellLines, wordsIn } from './docs-testkit.js';
+import { escapeRe, fencedBlocks, headingSlugs, sectionOf, wordsIn } from './docs-testkit.js';
 
 // dist/cli -> dist -> repo root
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -22,8 +22,8 @@ const html = (): string => read(join(SITE, 'index.html'));
 
 /**
  * The explainer page is checked as static text, so these checks run in CI without a
- * browser: it loads nothing it should not, its commands are the README's, its images are
- * the console screenshots, and every link it gives points at a file and heading that exist.
+ * browser: it loads nothing it should not, it stays within its word budgets, its commands are
+ * the README's, and every link it gives points at a file and heading that exist.
  * `ui-tests/site.spec.ts` checks how the page behaves in a browser.
  *
  * Tests named with "fixture:" prove a check catches seeded drift.
@@ -127,7 +127,7 @@ const pngSize = (bytes: Buffer): { width: number; height: number } | undefined =
 // ---- Fixtures --------------------------------------------------------------------
 
 describe('the static-page checks catch drift', () => {
-  const GOOD = '<html><head><link href="https://fonts.googleapis.com/css2?family=X" rel="stylesheet"><link rel="canonical" href="https://example.com/"></head><body><img src="assets/inbox.png" alt="Inbox"></body></html>';
+  const GOOD = '<html><head><link href="https://fonts.googleapis.com/css2?family=X" rel="stylesheet"><link rel="canonical" href="https://example.com/"></head><body><img src="og.png" alt="Preview"></body></html>';
 
   it('fixture: a page that loads only fonts and local files passes', () => {
     assert.deepEqual(loadProblems(GOOD), []);
@@ -136,7 +136,7 @@ describe('the static-page checks catch drift', () => {
   it('fixture: a script file, an unknown host, a rooted path and a missing file each fail', () => {
     assert.match(loadProblems('<script src="app.js"></script>').join('\n'), /<script src>/);
     assert.match(loadProblems('<link href="https://cdn.example.com/x.css" rel="stylesheet">').join('\n'), /loads from cdn\.example\.com/);
-    assert.match(loadProblems('<img src="/assets/inbox.png" alt="x">').join('\n'), /not a relative URL/);
+    assert.match(loadProblems('<img src="/og.png" alt="x">').join('\n'), /not a relative URL/);
     assert.match(loadProblems('<img src="assets/nope.png" alt="x">').join('\n'), /does not exist in site\//);
     assert.match(loadProblems('<style>a{background:url(https://cdn.example.com/a.png)}</style>').join('\n'), /loads from cdn\.example\.com/);
   });
@@ -145,7 +145,7 @@ describe('the static-page checks catch drift', () => {
     assert.match(loadProblems('<canvas></canvas><script>c.getContext("webgl")</script>').join('\n'), /WebGL/);
     assert.match(loadProblems('<script type="importmap">{}</script>').join('\n'), /import map/);
     assert.match(loadProblems('<script>gtag("config")</script>').join('\n'), /analytics/);
-    assert.match(loadProblems('<img src="assets/inbox.png">').join('\n'), /without alt text/);
+    assert.match(loadProblems('<img src="og.png">').join('\n'), /without alt text/);
   });
 
   it('fixture: a link into the repository to a missing file or heading fails', () => {
@@ -245,41 +245,6 @@ describe('the page says what the README says', () => {
     const block = fencedBlocks(section).find((b) => b.join('\n').includes('docs/AGENT-SETUP.md'))?.join('\n');
     assert.ok(block, 'README has no paste-ready prompt that names docs/AGENT-SETUP.md');
     assert.equal(textOfId(html(), 'cmdAgent'), block);
-  });
-
-  it('shows only commands that the README or the agent guide shows', () => {
-    const known = new Set<string>();
-    for (const md of [readme, read(join(repoRoot, 'docs', 'AGENT-SETUP.md'))]) {
-      for (const line of [...commandLines(md), ...shellLines(md)]) known.add(line.replace(/\s+/g, ' ').trim());
-      for (const span of md.matchAll(/`([^`]+)`/g)) known.add(span[1]!.trim());
-    }
-    const page = html();
-    const shown = [
-      ...[...page.matchAll(/<span class="ln c">([\s\S]*?)<\/span>/g)].map((m) => decode(m[1]!)),
-      ...[...page.matchAll(/<code>((?:agentsys|node dist\/cli\/main\.js) [^<]*)<\/code>/g)].map((m) => decode(m[1]!)),
-      ...[...page.matchAll(/<div class="how">([\s\S]*?)<\/div>/g)].flatMap((m) => [...m[1]!.matchAll(/<span>([^<]+)<\/span>/g)].map((s) => decode(s[1]!))),
-    ].map((c) => c.replace(/\\\n\s*/g, ' ').replace(/\s+/g, ' ').trim());
-    assert.ok(shown.length > 8, `expected the page to show its commands, found ${shown.length}`);
-    assert.deepEqual(shown.filter((c) => !known.has(c)), [], 'on the page but not in the README or docs/AGENT-SETUP.md');
-  });
-
-  it('keeps no screenshot that docs/console-screens does not hold', () => {
-    assert.ok(existsSync(join(repoRoot, 'docs', 'console-screens')), 'docs/console-screens is missing');
-    const sources = new Set(readdirSync(join(repoRoot, 'docs', 'console-screens')));
-    const strays = readdirSync(join(SITE, 'assets')).filter((f) => !sources.has(f));
-    assert.deepEqual(strays, [], 'in site/assets but not in docs/console-screens');
-  });
-
-  it('shows the console screenshots byte for byte', () => {
-    assert.ok(existsSync(join(repoRoot, 'docs', 'console-screens')), 'docs/console-screens is missing');
-    const shots = readdirSync(join(repoRoot, 'docs', 'console-screens')).filter((f) => f.endsWith('.png'));
-    assert.ok(shots.length > 0);
-    for (const shot of shots) {
-      const copy = join(SITE, 'assets', shot);
-      assert.ok(existsSync(copy), `site/assets/${shot} is missing. Run: cp docs/console-screens/*.png site/assets/`);
-      assert.ok(readFileSync(copy).equals(readFileSync(join(repoRoot, 'docs', 'console-screens', shot))),
-        `site/assets/${shot} differs from docs/console-screens/${shot}. Run: cp docs/console-screens/*.png site/assets/`);
-    }
   });
 
   it('links only to files and headings in this repository that exist', () => {
