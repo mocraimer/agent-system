@@ -1,6 +1,6 @@
 # agent-system
 
-Your coding agents work your GitHub issues while you're away. On the subscription you already pay for, up to the limit you set. You come back to reviewed pull requests.
+Your coding agents work your GitHub issues while you're away. They work on the subscription you already pay for, up to the limit you set. You merge reviewed pull requests.
 
 ![One made-up issue, start to finish: you open issue 412 and add the shaped and auto labels, Claude Code opens a pull request while you are away, a GPT model reviews it and its findings are fixed, and you merge. A meter of the subscription's week shows your use and the agents' use, and the agents stop at your limit.](site/loop.png)
 

@@ -159,7 +159,7 @@ for (const { width, height } of [DESKTOP, PHONE]) {
 
 test('the end frame is five steps with their actors, and a meter with your use, the agents and your limit', async ({ browser }) => {
   await withPage(browser, { viewport: DESKTOP, reducedMotion: 'reduce' }, async ({ page }) => {
-    expect(await page.locator('#strip li .who').allTextContents()).toEqual(['You', 'You', 'Claude Code', 'GPT reviews', 'You']);
+    expect(await page.locator('#strip li .who').allTextContents()).toEqual(['You', 'You', 'Claude Code', 'GPT reviews', 'You merge']);
     await expect(page.locator('#strip li').nth(1)).toContainText('shaped');
     await expect(page.locator('#strip li').nth(1)).toContainText('auto');
     await expect(page.locator('#strip li').nth(4)).toContainText('Merge');

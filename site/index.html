@@ -9,14 +9,14 @@
 <link rel="canonical" href="https://mocraimer.github.io/agent-system/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="agent-system — your coding agents work your GitHub issues while you’re away">
-<meta property="og:description" content="On the subscription you already pay for, up to the limit you set. You come back to reviewed pull requests.">
+<meta property="og:description" content="They work on the subscription you already pay for, up to the limit you set. You merge reviewed pull requests.">
 <meta property="og:url" content="https://mocraimer.github.io/agent-system/">
 <meta property="og:image" content="https://mocraimer.github.io/agent-system/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="agent-system — your coding agents work your GitHub issues while you’re away">
-<meta name="twitter:description" content="On the subscription you already pay for, up to the limit you set. You come back to reviewed pull requests.">
+<meta name="twitter:description" content="They work on the subscription you already pay for, up to the limit you set. You merge reviewed pull requests.">
 <meta name="twitter:image" content="https://mocraimer.github.io/agent-system/og.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23070a11'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23ffb454'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -80,6 +80,7 @@ h1 em,h2 em{font-style:italic;color:var(--accent)}
 /* hero: the headline, one issue through the loop, and the week's allowance it draws on */
 .hero{padding:clamp(80px,12vh,112px) 0 clamp(40px,7vh,72px);display:grid;gap:22px;align-content:start}
 .sub{font-size:clamp(17px,1.6vw,20px);color:#c9d0de;max-width:36em;text-wrap:balance}
+.sub b{color:#fff}
 #picture{display:grid;gap:24px;margin-top:6px}
 .ic{width:16px;height:16px;flex:none}
 .lbl{display:inline-block;font:500 12px/1 var(--sans);padding:5px 9px;border-radius:999px;border:1px solid}
@@ -213,7 +214,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
 
 <section class="hero" id="intro">
   <h1>Your coding agents work your GitHub issues <em>while you’re away.</em></h1>
-  <p class="sub">On the subscription you already pay for, up to the limit you set. You come back to reviewed pull requests.</p>
+  <p class="sub">They work on the <b>subscription you already pay for</b>, up to the <b>limit you set</b>. You <b>merge</b> reviewed pull requests.</p>
 
   <div id="picture">
     <div class="stripwrap">
@@ -222,7 +223,7 @@ footer{border-top:1px solid var(--line);padding:30px 0 50px;font-size:14px;color
         <li class="you" style="--n:1"><div class="card"><span class="who">You</span><span class="row"><span class="lbl shaped">shaped</span><span class="lbl auto">auto</span></span><span class="t">Two labels: go ahead</span></div><span class="when">11:41 pm</span></li>
         <li class="agent" style="--n:2"><div class="card"><span class="who">Claude Code</span><span class="row t"><svg class="ic ok" aria-hidden="true"><use href="#i-pr"/></svg><span class="mono">PR #418</span></span><span class="t">fix(web): export headers for an empty list</span></div><span class="when">12:15 am</span></li>
         <li class="agent" style="--n:3"><div class="card"><span class="who">GPT reviews</span><span class="t">2 findings</span><span class="row t"><svg class="ic ok" aria-hidden="true"><use href="#i-check"/></svg>both fixed</span></div><span class="when">1:02 am</span></li>
-        <li class="you final" style="--n:4"><div class="card"><span class="who">You</span><span class="row t"><svg class="ic ok" aria-hidden="true"><use href="#i-check"/></svg>checks · review clean</span><span><span class="merge">Merge</span></span></div><span class="when">7:30 am</span></li>
+        <li class="you final" style="--n:4"><div class="card"><span class="who">You merge</span><span class="row t"><svg class="ic ok" aria-hidden="true"><use href="#i-check"/></svg>checks · review clean</span><span><span class="merge">Merge</span></span></div><span class="when">7:30 am</span></li>
       </ol>
       <span class="away" aria-hidden="true">while you’re away</span>
     </div>
