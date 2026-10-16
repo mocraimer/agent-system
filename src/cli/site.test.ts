@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
-import { commandLines, escapeRe, fencedBlocks, headingSlugs, sectionOf, shellLines } from './docs-testkit.js';
+import { commandLines, escapeRe, fencedBlocks, headingSlugs, sectionOf, shellLines, wordsIn } from './docs-testkit.js';
 
 // dist/cli -> dist -> repo root
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -13,6 +13,9 @@ const REPO_URL = 'https://github.com/mocraimer/agent-system';
 const RAW_URL = 'https://raw.githubusercontent.com/mocraimer/agent-system/main/';
 /** The only hosts outside the site that the page may load a resource from: they serve its three typefaces. */
 const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
+/** What a visitor takes in at a glance: the headline and sub line together, and everything they can read outside the commands. */
+const HERO_WORDS_MAX = 30;
+const PAGE_WORDS_MAX = 500;
 
 const read = (path: string): string => readFileSync(path, 'utf8');
 const html = (): string => read(join(SITE, 'index.html'));
@@ -92,6 +95,29 @@ function repoLinkProblems(text: string): string[] {
   return problems;
 }
 
+/** The words a visitor reads: the body without its commands (`<pre>`), script and style, and without markup. */
+function visibleWords(page: string): string[] {
+  const body = /<body\b[^>]*>([\s\S]*)<\/body>/.exec(page)?.[1] ?? '';
+  return wordsIn(decode(body.replace(/<(pre|script|style)\b[\s\S]*?<\/\1>/g, ' ').replace(/<[^>]+>/g, ' ')));
+}
+
+/** The words of the headline (`<h1>`) and of the paragraph right after it, the sub line. */
+function heroWords(page: string): string[] {
+  const hero = /<h1\b[^>]*>([\s\S]*?)<\/h1>\s*<p\b[^>]*>([\s\S]*?)<\/p>/.exec(page);
+  return hero ? wordsIn(decode(`${hero[1]} ${hero[2]}`.replace(/<[^>]+>/g, ' '))) : [];
+}
+
+/** One problem per word budget the page is over, and one for a hero it does not have. */
+function wordBudgetProblems(page: string): string[] {
+  const problems: string[] = [];
+  const hero = heroWords(page).length;
+  if (hero === 0) problems.push('the page has no headline and sub line');
+  if (hero > HERO_WORDS_MAX) problems.push(`the headline and sub line are ${hero} words; the most is ${HERO_WORDS_MAX}`);
+  const all = visibleWords(page).length;
+  if (all > PAGE_WORDS_MAX) problems.push(`the page shows ${all} words outside its commands; the most is ${PAGE_WORDS_MAX}`);
+  return problems;
+}
+
 /** Width and height from the IHDR chunk, or undefined when the bytes are not a PNG header. */
 const pngSize = (bytes: Buffer): { width: number; height: number } | undefined =>
   bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
@@ -146,6 +172,30 @@ describe('the static-page checks catch drift', () => {
   });
 });
 
+describe('the word-budget check catches a page that says too much', () => {
+  const words = (n: number): string => Array.from({ length: n }, (_, i) => `w${i}`).join(' ');
+  const page = (headline: number, sub: number, body: number, commands = 0): string =>
+    `<html><head><title>${words(99)}</title><style>a{}</style></head><body><h1>${words(headline)}</h1><p class="sub">${words(sub)}</p><p>${words(body)}</p>` +
+    `<pre>${words(commands)}</pre><script>${words(commands)}</script></body></html>`;
+
+  it('fixture: a hero of 30 words and a page of 500 pass, whatever the head, commands and script hold', () => {
+    assert.deepEqual(wordBudgetProblems(page(10, 20, 470, 400)), []);
+  });
+
+  it('fixture: a hero of 31 words fails, counting the headline and the sub line together', () => {
+    assert.match(wordBudgetProblems(page(11, 20, 100)).join('\n'), /31 words; the most is 30/);
+  });
+
+  it('fixture: a page of 501 words fails', () => {
+    assert.match(wordBudgetProblems(page(10, 20, 471)).join('\n'), /501 words outside its commands/);
+  });
+
+  it('fixture: a page with no headline fails, and entities and inline tags do not change the count', () => {
+    assert.match(wordBudgetProblems('<body><p>text</p></body>').join('\n'), /no headline/);
+    assert.equal(heroWords('<h1>Your <em>agents</em> work &amp; wait</h1><p class="sub">now</p>').length, 5, '&amp; alone is not a word');
+  });
+});
+
 // ---- The page --------------------------------------------------------------------
 
 describe('the explainer page loads only what it should', () => {
@@ -171,6 +221,10 @@ describe('the explainer page loads only what it should', () => {
 
   it('has an og.png of 1200 by 630 pixels', () => {
     assert.deepEqual(pngSize(readFileSync(join(SITE, 'og.png'))), { width: 1200, height: 630 });
+  });
+
+  it('can be read in five seconds: the hero is at most 30 words and the page at most 500 outside its commands', () => {
+    assert.deepEqual(wordBudgetProblems(html()), []);
   });
 });
 

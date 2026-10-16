@@ -15,6 +15,10 @@ import { extname, join, normalize, relative } from 'node:path';
  * tests need no network and any other request that fails is a defect. Only the link-preview
  * test lets the typefaces load, so the image shows them; it also passes offline, in system fonts.
  *
+ * The first screen is captured for the five-second glance task (T9 in docs/READER-TASKS.md): at
+ * 1280 by 800 and 390 by 740, 2 seconds after load, at rest, and at rest with reduced motion. The
+ * shots land in test-results/site-first-screen/ as {desktop,phone}-{2s,rest,reduced}.png.
+ *
  * The first-screen shot at 1200 by 630 pixels is written to test-results/site-og.png.
  * To refresh the link preview, run `npm run test:ui`, then:
  *   cp test-results/site-og.png site/og.png
@@ -183,6 +187,54 @@ test('with reduced motion, nothing animates and every line of the hero terminal 
     expect(await page.evaluate(() => getComputedStyle(document.documentElement).scrollBehavior)).toBe('auto');
   });
 });
+
+const FIRST_SCREENS = [
+  { name: 'desktop', width: 1280, height: 800, scale: 1 },
+  { name: 'phone', width: 390, height: 740, scale: 2 },
+] as const;
+const FIRST_SCREEN_DIR = join(process.cwd(), 'test-results', 'site-first-screen');
+/** When the page is at rest: later than any motion it plays, so the same wait suits a page that types or one that slides. */
+const REST_MS = 8_000;
+
+/** Save a screenshot of the visible first screen and check it is the size the viewer sees. */
+async function captureFirstScreen(page: Page, file: string, width: number, height: number, scale: number): Promise<void> {
+  mkdirSync(FIRST_SCREEN_DIR, { recursive: true });
+  const shot = await page.screenshot({ path: join(FIRST_SCREEN_DIR, file) });
+  expect(shot.readUInt32BE(16), `${file} width`).toBe(width * scale);
+  expect(shot.readUInt32BE(20), `${file} height`).toBe(height * scale);
+}
+
+for (const { name, width, height, scale } of FIRST_SCREENS) {
+  test(`the first screen at ${width} by ${height} is captured 2 seconds after load and at rest`, async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale });
+    try {
+      const page = await context.newPage();
+      const errors: string[] = [];
+      page.on('pageerror', (e) => errors.push(e.message));
+      await page.goto(base);
+      const loaded = Date.now();
+      await page.waitForTimeout(Math.max(0, 2_000 - (Date.now() - loaded)));
+      await captureFirstScreen(page, `${name}-2s.png`, width, height, scale);
+      await page.waitForTimeout(Math.max(0, REST_MS - (Date.now() - loaded)));
+      await captureFirstScreen(page, `${name}-rest.png`, width, height, scale);
+      expect(errors, 'page errors while the first screen played').toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test(`the first screen at ${width} by ${height} is captured at rest with reduced motion`, async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: scale, reducedMotion: 'reduce' });
+    try {
+      const page = await context.newPage();
+      await page.goto(base);
+      await page.waitForTimeout(500);
+      await captureFirstScreen(page, `${name}-reduced.png`, width, height, scale);
+    } finally {
+      await context.close();
+    }
+  });
+}
 
 test('the first screen at 1200 by 630 is written for the link preview', async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 1200, height: 630 } });
