@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { promisify } from 'node:util';
 import {
-  CLI_PREFIX, commandLines, escapeRe, fencedBlocks, headingSlugs, markdownLines, proseOf, sectionOf, shellLines, withoutComment,
+  CLI_PREFIX, commandLines, escapeRe, fencedBlocks, headingSlugs, markdownLines, proseOf, readableTextBefore, sectionOf, shellLines, withoutComment, wordsIn,
 } from './docs-testkit.js';
 
 const run = promisify(execFile);
@@ -261,24 +261,51 @@ function nodeVersionProblems(readme: string, engines: string): string[] {
 const STATUS = /^(?:unverified|verified \(\d{4}-\d{2}-\d{2}\)(?:; not driven: .+)?|stale \(\d{4}-\d{2}-\d{2}\): .+)$/;
 const TASK_FIELDS = ['Reader', 'Documents', 'Ends up able to', 'Status'];
 
+/** Each reader-task entry ("### T1 — Title") with its `- **Field:** text` lines. */
+function readerTasks(md: string): { id: string; fields: Map<string, string> }[] {
+  return md.split(/^### /m).slice(1).filter((e) => /^T\d+ — /.test(e)).map((entry) => {
+    const fields = new Map<string, string>();
+    for (const m of entry.matchAll(/^- \*\*(.+?):\*\* (.+)$/gm)) fields.set(m[1]!, m[2]!.trim());
+    return { id: /^(T\d+)/.exec(entry)![1]!, fields };
+  });
+}
+
 /** One problem per reader-task entry that misses a field, repeats an id, names no document, or has a status the list does not define. */
 function readerTaskProblems(md: string): string[] {
   const problems: string[] = [];
-  const entries = md.split(/^### /m).slice(1).filter((e) => /^T\d+ — /.test(e));
-  if (entries.length === 0) return ['no reader-task entries ("### T1 — Title")'];
+  const tasks = readerTasks(md);
+  if (tasks.length === 0) return ['no reader-task entries ("### T1 — Title")'];
   const ids = new Set<string>();
-  for (const entry of entries) {
-    const id = /^(T\d+)/.exec(entry)![1]!;
+  for (const { id, fields } of tasks) {
     if (ids.has(id)) problems.push(`${id}: listed twice`);
     ids.add(id);
-    const fields = new Map<string, string>();
-    for (const m of entry.matchAll(/^- \*\*(.+?):\*\* (.+)$/gm)) fields.set(m[1]!, m[2]!.trim());
     for (const name of TASK_FIELDS) if (!fields.get(name)) problems.push(`${id}: missing field "${name}"`);
     const status = fields.get('Status');
     if (status !== undefined && !STATUS.test(status)) problems.push(`${id}: invalid status "${status}"`);
     if (fields.has('Documents') && !/\]\([^)]+\)/.test(fields.get('Documents')!)) problems.push(`${id}: Documents names no linked document`);
   }
   return problems;
+}
+
+/** What the glance task's "How it is walked" must say: the reader sees screenshots at both sizes and both moments, never the source. */
+const GLANCE_WALK = [/screenshots/, /never the source/, /1280×800/, /390×740/, /2 seconds/, /at rest/, /README/];
+
+/** One problem unless T9 exists and says how a first screen is walked. */
+function glanceTaskProblems(md: string): string[] {
+  const walk = readerTasks(md).find((t) => t.id === 'T9')?.fields.get('How it is walked');
+  if (walk === undefined) return ['T9: missing, or has no "How it is walked" field'];
+  return GLANCE_WALK.filter((re) => !re.test(walk)).map((re) => `T9: the walk does not say ${re.source}`);
+}
+
+/** The README's opening, up to its quick start, is what a reader takes in before they decide to try it. */
+const README_TOP_WORDS_MAX = 200;
+
+/** One problem when the README's words above `## Quick start`, outside code fences, pass the budget, or when it has no such heading. */
+function readmeTopProblems(md: string): string[] {
+  const top = readableTextBefore(md, /^Quick start$/i);
+  if (top === undefined) return ['README has no "Quick start" section'];
+  const n = wordsIn(top).length;
+  return n > README_TOP_WORDS_MAX ? [`the README says ${n} words before "Quick start"; the most is ${README_TOP_WORDS_MAX}`] : [];
 }
 
 // ---- Fixtures: each check catches seeded drift ----------------------------------
@@ -434,6 +461,26 @@ describe('the link and version checks catch drift', () => {
   });
 });
 
+describe('the README word-budget check catches an opening that says too much', () => {
+  const words = (n: number): string => Array.from({ length: n }, (_, i) => `w${i}`).join(' ');
+  const readme = (top: number, quick = 400): string =>
+    `# Title\n\n${words(top)}\n\n\`\`\`text\n${words(300)}\n\`\`\`\n\n## Quick start\n\n${words(quick)}\n`;
+
+  it('fixture: an opening of 200 words passes, whatever its fences and the quick start hold', () => {
+    assert.deepEqual(readmeTopProblems(readme(199)), [], 'the "Title" heading is one word');
+  });
+
+  it('fixture: an opening of 201 words fails', () => {
+    assert.match(readmeTopProblems(readme(200)).join('\n'), /201 words before "Quick start"/);
+  });
+
+  it('fixture: an image, a link target, a table rule and a tag are not words, and a missing quick start fails', () => {
+    const md = '# T\n\n![alt text that is long](loop.png) [link](https://example.com/a/b) |---|---| <br> ok\n\n## Quick start\n';
+    assert.equal(wordsIn(readableTextBefore(md, /^Quick start$/)!).length, 3, 'T, link, ok');
+    assert.deepEqual(readmeTopProblems('# T\n\nbody'), ['README has no "Quick start" section']);
+  });
+});
+
 describe('the reader-task check catches drift', () => {
   const entry = (status: string, extra = ''): string => [
     '### T1 — Decide fit', '',
@@ -463,6 +510,18 @@ describe('the reader-task check catches drift', () => {
   it('fixture: an entry that links no document fails', () => {
     const problems = readerTaskProblems(entry('unverified').replace('[README.md](../README.md)', 'README.md'));
     assert.deepEqual(problems, ['T1: Documents names no linked document']);
+  });
+
+  it('fixture: the glance task must say it is walked from screenshots of both sizes and the README', () => {
+    const t9 = (walk: string): string => [
+      '### T9 — Five-second glance', '',
+      '- **Reader:** A developer.', '- **Documents:** [README.md](../README.md)', '- **Ends up able to:** Say it.',
+      `- **How it is walked:** ${walk}`, '- **Status:** unverified',
+    ].join('\n');
+    const walk = 'The reader sees only screenshots, never the source: the page at 1280×800 and 390×740, each at 2 seconds and at rest, and the README top.';
+    assert.deepEqual(glanceTaskProblems(t9(walk)), []);
+    assert.equal(glanceTaskProblems(t9('The reader reads the page.')).length, GLANCE_WALK.length);
+    assert.deepEqual(glanceTaskProblems(entry('unverified')), ['T9: missing, or has no "How it is walked" field']);
   });
 
   it('fixture: a repeated id and a file with no entries fail', () => {
@@ -535,5 +594,23 @@ describe('the README points to the page and to the agent runbook', () => {
 describe('the reader-task list is well formed', () => {
   it('every entry has its fields, a valid status and a linked document', () => {
     assert.deepEqual(readerTaskProblems(read(TASKS_PATH)), []);
+  });
+
+  it('the glance task says how a first screen is walked', () => {
+    assert.deepEqual(glanceTaskProblems(read(TASKS_PATH)), []);
+  });
+});
+
+describe('the README can be read in five seconds', () => {
+  it('says at most 200 words before its quick start, outside code fences', () => {
+    assert.deepEqual(readmeTopProblems(read(README_PATH)), []);
+  });
+
+  it("opens with the page's picture, site/loop.png, whose alt text names the merge and the limit", () => {
+    const image = /!\[([^\]]*)\]\(([^)\s]+)\)/.exec(proseOf(read(README_PATH)));
+    assert.ok(image, 'the README shows no image');
+    assert.equal(image[2], 'site/loop.png');
+    assert.match(image[1]!, /merge/i);
+    assert.match(image[1]!, /limit/i);
   });
 });

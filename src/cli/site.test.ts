@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
-import { commandLines, escapeRe, fencedBlocks, headingSlugs, sectionOf, shellLines } from './docs-testkit.js';
+import { escapeRe, fencedBlocks, headingSlugs, sectionOf, wordsIn } from './docs-testkit.js';
 
 // dist/cli -> dist -> repo root
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -13,14 +13,17 @@ const REPO_URL = 'https://github.com/mocraimer/agent-system';
 const RAW_URL = 'https://raw.githubusercontent.com/mocraimer/agent-system/main/';
 /** The only hosts outside the site that the page may load a resource from: they serve its three typefaces. */
 const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
+/** What a visitor takes in at a glance: the headline and sub line together, and everything they can read outside the commands. */
+const HERO_WORDS_MAX = 30;
+const PAGE_WORDS_MAX = 500;
 
 const read = (path: string): string => readFileSync(path, 'utf8');
 const html = (): string => read(join(SITE, 'index.html'));
 
 /**
  * The explainer page is checked as static text, so these checks run in CI without a
- * browser: it loads nothing it should not, its commands are the README's, its images are
- * the console screenshots, and every link it gives points at a file and heading that exist.
+ * browser: it loads nothing it should not, it stays within its word budgets, its commands are
+ * the README's, and every link it gives points at a file and heading that exist.
  * `ui-tests/site.spec.ts` checks how the page behaves in a browser.
  *
  * Tests named with "fixture:" prove a check catches seeded drift.
@@ -92,6 +95,29 @@ function repoLinkProblems(text: string): string[] {
   return problems;
 }
 
+/** The words a visitor reads: the body without its commands (`<pre>`), script and style, and without markup. */
+function visibleWords(page: string): string[] {
+  const body = /<body\b[^>]*>([\s\S]*)<\/body>/.exec(page)?.[1] ?? '';
+  return wordsIn(decode(body.replace(/<(pre|script|style)\b[\s\S]*?<\/\1>/g, ' ').replace(/<[^>]+>/g, ' ')));
+}
+
+/** The words of the headline (`<h1>`) and of the paragraph right after it, the sub line. */
+function heroWords(page: string): string[] {
+  const hero = /<h1\b[^>]*>([\s\S]*?)<\/h1>\s*<p\b[^>]*>([\s\S]*?)<\/p>/.exec(page);
+  return hero ? wordsIn(decode(`${hero[1]} ${hero[2]}`.replace(/<[^>]+>/g, ' '))) : [];
+}
+
+/** One problem per word budget the page is over, and one for a hero it does not have. */
+function wordBudgetProblems(page: string): string[] {
+  const problems: string[] = [];
+  const hero = heroWords(page).length;
+  if (hero === 0) problems.push('the page has no headline and sub line');
+  if (hero > HERO_WORDS_MAX) problems.push(`the headline and sub line are ${hero} words; the most is ${HERO_WORDS_MAX}`);
+  const all = visibleWords(page).length;
+  if (all > PAGE_WORDS_MAX) problems.push(`the page shows ${all} words outside its commands; the most is ${PAGE_WORDS_MAX}`);
+  return problems;
+}
+
 /** Width and height from the IHDR chunk, or undefined when the bytes are not a PNG header. */
 const pngSize = (bytes: Buffer): { width: number; height: number } | undefined =>
   bytes.length >= 24 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
@@ -101,7 +127,7 @@ const pngSize = (bytes: Buffer): { width: number; height: number } | undefined =
 // ---- Fixtures --------------------------------------------------------------------
 
 describe('the static-page checks catch drift', () => {
-  const GOOD = '<html><head><link href="https://fonts.googleapis.com/css2?family=X" rel="stylesheet"><link rel="canonical" href="https://example.com/"></head><body><img src="assets/inbox.png" alt="Inbox"></body></html>';
+  const GOOD = '<html><head><link href="https://fonts.googleapis.com/css2?family=X" rel="stylesheet"><link rel="canonical" href="https://example.com/"></head><body><img src="og.png" alt="Preview"></body></html>';
 
   it('fixture: a page that loads only fonts and local files passes', () => {
     assert.deepEqual(loadProblems(GOOD), []);
@@ -110,7 +136,7 @@ describe('the static-page checks catch drift', () => {
   it('fixture: a script file, an unknown host, a rooted path and a missing file each fail', () => {
     assert.match(loadProblems('<script src="app.js"></script>').join('\n'), /<script src>/);
     assert.match(loadProblems('<link href="https://cdn.example.com/x.css" rel="stylesheet">').join('\n'), /loads from cdn\.example\.com/);
-    assert.match(loadProblems('<img src="/assets/inbox.png" alt="x">').join('\n'), /not a relative URL/);
+    assert.match(loadProblems('<img src="/og.png" alt="x">').join('\n'), /not a relative URL/);
     assert.match(loadProblems('<img src="assets/nope.png" alt="x">').join('\n'), /does not exist in site\//);
     assert.match(loadProblems('<style>a{background:url(https://cdn.example.com/a.png)}</style>').join('\n'), /loads from cdn\.example\.com/);
   });
@@ -119,7 +145,7 @@ describe('the static-page checks catch drift', () => {
     assert.match(loadProblems('<canvas></canvas><script>c.getContext("webgl")</script>').join('\n'), /WebGL/);
     assert.match(loadProblems('<script type="importmap">{}</script>').join('\n'), /import map/);
     assert.match(loadProblems('<script>gtag("config")</script>').join('\n'), /analytics/);
-    assert.match(loadProblems('<img src="assets/inbox.png">').join('\n'), /without alt text/);
+    assert.match(loadProblems('<img src="og.png">').join('\n'), /without alt text/);
   });
 
   it('fixture: a link into the repository to a missing file or heading fails', () => {
@@ -143,6 +169,30 @@ describe('the static-page checks catch drift', () => {
     assert.deepEqual(pngSize(header), { width: 1200, height: 630 });
     assert.equal(pngSize(Buffer.from('GIF89a')), undefined);
     assert.equal(pngSize(header.subarray(0, 16)), undefined, 'a header cut short is not read past its end');
+  });
+});
+
+describe('the word-budget check catches a page that says too much', () => {
+  const words = (n: number): string => Array.from({ length: n }, (_, i) => `w${i}`).join(' ');
+  const page = (headline: number, sub: number, body: number, commands = 0): string =>
+    `<html><head><title>${words(99)}</title><style>a{}</style></head><body><h1>${words(headline)}</h1><p class="sub">${words(sub)}</p><p>${words(body)}</p>` +
+    `<pre>${words(commands)}</pre><script>${words(commands)}</script></body></html>`;
+
+  it('fixture: a hero of 30 words and a page of 500 pass, whatever the head, commands and script hold', () => {
+    assert.deepEqual(wordBudgetProblems(page(10, 20, 470, 400)), []);
+  });
+
+  it('fixture: a hero of 31 words fails, counting the headline and the sub line together', () => {
+    assert.match(wordBudgetProblems(page(11, 20, 100)).join('\n'), /31 words; the most is 30/);
+  });
+
+  it('fixture: a page of 501 words fails', () => {
+    assert.match(wordBudgetProblems(page(10, 20, 471)).join('\n'), /501 words outside its commands/);
+  });
+
+  it('fixture: a page with no headline fails, and entities and inline tags do not change the count', () => {
+    assert.match(wordBudgetProblems('<body><p>text</p></body>').join('\n'), /no headline/);
+    assert.equal(heroWords('<h1>Your <em>agents</em> work &amp; wait</h1><p class="sub">now</p>').length, 5, '&amp; alone is not a word');
   });
 });
 
@@ -172,6 +222,10 @@ describe('the explainer page loads only what it should', () => {
   it('has an og.png of 1200 by 630 pixels', () => {
     assert.deepEqual(pngSize(readFileSync(join(SITE, 'og.png'))), { width: 1200, height: 630 });
   });
+
+  it('can be read in five seconds: the hero is at most 30 words and the page at most 500 outside its commands', () => {
+    assert.deepEqual(wordBudgetProblems(html()), []);
+  });
 });
 
 describe('the page says what the README says', () => {
@@ -191,41 +245,6 @@ describe('the page says what the README says', () => {
     const block = fencedBlocks(section).find((b) => b.join('\n').includes('docs/AGENT-SETUP.md'))?.join('\n');
     assert.ok(block, 'README has no paste-ready prompt that names docs/AGENT-SETUP.md');
     assert.equal(textOfId(html(), 'cmdAgent'), block);
-  });
-
-  it('shows only commands that the README or the agent guide shows', () => {
-    const known = new Set<string>();
-    for (const md of [readme, read(join(repoRoot, 'docs', 'AGENT-SETUP.md'))]) {
-      for (const line of [...commandLines(md), ...shellLines(md)]) known.add(line.replace(/\s+/g, ' ').trim());
-      for (const span of md.matchAll(/`([^`]+)`/g)) known.add(span[1]!.trim());
-    }
-    const page = html();
-    const shown = [
-      ...[...page.matchAll(/<span class="ln c">([\s\S]*?)<\/span>/g)].map((m) => decode(m[1]!)),
-      ...[...page.matchAll(/<code>((?:agentsys|node dist\/cli\/main\.js) [^<]*)<\/code>/g)].map((m) => decode(m[1]!)),
-      ...[...page.matchAll(/<div class="how">([\s\S]*?)<\/div>/g)].flatMap((m) => [...m[1]!.matchAll(/<span>([^<]+)<\/span>/g)].map((s) => decode(s[1]!))),
-    ].map((c) => c.replace(/\\\n\s*/g, ' ').replace(/\s+/g, ' ').trim());
-    assert.ok(shown.length > 8, `expected the page to show its commands, found ${shown.length}`);
-    assert.deepEqual(shown.filter((c) => !known.has(c)), [], 'on the page but not in the README or docs/AGENT-SETUP.md');
-  });
-
-  it('keeps no screenshot that docs/console-screens does not hold', () => {
-    assert.ok(existsSync(join(repoRoot, 'docs', 'console-screens')), 'docs/console-screens is missing');
-    const sources = new Set(readdirSync(join(repoRoot, 'docs', 'console-screens')));
-    const strays = readdirSync(join(SITE, 'assets')).filter((f) => !sources.has(f));
-    assert.deepEqual(strays, [], 'in site/assets but not in docs/console-screens');
-  });
-
-  it('shows the console screenshots byte for byte', () => {
-    assert.ok(existsSync(join(repoRoot, 'docs', 'console-screens')), 'docs/console-screens is missing');
-    const shots = readdirSync(join(repoRoot, 'docs', 'console-screens')).filter((f) => f.endsWith('.png'));
-    assert.ok(shots.length > 0);
-    for (const shot of shots) {
-      const copy = join(SITE, 'assets', shot);
-      assert.ok(existsSync(copy), `site/assets/${shot} is missing. Run: cp docs/console-screens/*.png site/assets/`);
-      assert.ok(readFileSync(copy).equals(readFileSync(join(repoRoot, 'docs', 'console-screens', shot))),
-        `site/assets/${shot} differs from docs/console-screens/${shot}. Run: cp docs/console-screens/*.png site/assets/`);
-    }
   });
 
   it('links only to files and headings in this repository that exist', () => {

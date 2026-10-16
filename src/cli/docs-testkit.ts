@@ -151,3 +151,22 @@ export function headingSlugs(md: string): Set<string> {
   }
   return slugs;
 }
+
+/** The words a reader meets: tokens with a letter or a digit, so a table rule, an arrow or a lone dash is not one. */
+export const wordsIn = (text: string): string[] => text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
+
+/**
+ * The text a reader sees above the first heading whose title matches: no fenced block, and
+ * from each line no image, link target, HTML tag, code tick, table bar or heading mark. Undefined when no heading matches.
+ */
+export function readableTextBefore(md: string, title: RegExp): string | undefined {
+  const kept: string[] = [];
+  for (const { text, fence, block } of markdownLines(md)) {
+    if (fence || block !== undefined) continue;
+    const heading = /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(text);
+    if (heading && title.test(heading[1]!)) return kept.join('\n');
+    kept.push(text.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/<[^>]+>/g, '').replace(/[`|]/g, ' ').replace(/^#{1,6}\s+/, ''));
+  }
+  return undefined;
+}
