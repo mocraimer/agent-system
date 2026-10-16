@@ -4,7 +4,7 @@ These are the tasks a reader comes to the agent-system documents to do. Each ent
 
 ## How a task is walked
 
-A reader with fresh context walks one task at a time: no memory of this repository, only the documents the task names. The reader works in a clean clone with a temporary state directory (`AGENTSYS_STATE` set to an empty directory). The reader never runs `agentsys usage` (it prints a real account id) and records where it got stuck. A task passes when the reader ends up able to do what the entry says without a step the documents leave out. T9 is the one exception: its entry says how it is walked.
+A reader with fresh context walks one task at a time: no memory of this repository, only the documents the task names. The reader works in a clean clone with a temporary state directory (`AGENTSYS_STATE` set to an empty directory). The reader never runs `agentsys usage` (it prints a real account id); the reader records where it got stuck. A task passes when the reader ends up able to do what the entry says without a step the documents leave out. T9 is the one exception: its entry says how it is walked.
 
 ## Statuses
 
@@ -41,7 +41,7 @@ A task carries one of three statuses:
 
 ### T4 — Pick a first job
 
-- **Reader:** A developer who wants one of: an approved task, CI repair, the ticket loop, the console, or the MCP (Model Context Protocol) server.
+- **Reader:** A developer who wants one of: an approved task, CI (continuous integration) repair, the ticket loop, the console, or the MCP (Model Context Protocol) server.
 - **Documents:** [README.md](../README.md#what-you-can-do)
 - **Ends up able to:** Find the exact next document or command for the chosen job.
 - **Status:** verified (2026-10-16)

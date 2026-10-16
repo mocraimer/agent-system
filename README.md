@@ -16,7 +16,7 @@ The limits that hold on every install:
 
 ## Quick start
 
-Needs Node.js 22.12 or newer and one signed-in runtime, the tool that runs the work: Claude Code, Pi, Codex cloud, or Claude Code web. You are the *operator*, the person who owns the installation. [Before you start](#before-you-start) lists the rest. Run these commands:
+agent-system needs Node.js 22.12 or newer and one signed-in runtime, the tool that runs the work: Claude Code, Pi, Codex cloud, or Claude Code web. You are the *operator*, the person who owns the installation. [Before you start](#before-you-start) lists the rest. Run these commands:
 
 ```bash
 git clone https://github.com/mocraimer/agent-system.git
@@ -36,7 +36,7 @@ agentsys dispatch --task first-try --repo example-org/larkspur --class ci-repair
 
 Each command gives this result:
 
-- `init` exits 0 and prints `Operator set to you@example.com. No autonomy grants are active.`
+- `init` exits 0 and prints `Operator set to you@example.com. No autonomy grants are active.`.
 - `readiness --runtime claude-local` exits 0 and prints `claude-local: ready`, or exits 1 and prints `claude-local: NOT READY` with what is missing. Swap in the runtime you will use. Without `--runtime` it checks all four and exits 1 while any is not set up.
 - `dispatch` exits 1 and prints `Awaiting approval (task first-try): No approval was supplied and there are no grants.` The refusal is the design: nothing runs without your approval.
 
@@ -66,7 +66,7 @@ Each row is a job, with the command that starts it and the guide to read next:
 |---|---|---|
 | Work your repository's issues with the ticket loop: shape them, open pull requests for the ones you grant, review and fix them, open a release pull request, and verify the release | `agentsys loop arm --repo <path>` | [Ticket loop example](examples/ticket-loop/README.md), [The ticket loop](docs/OPERATING.md#the-ticket-loop) |
 | Run one approved task on the runtime you choose | `agentsys approve`, then `agentsys dispatch` | [Approving one task](docs/OPERATING.md#approving-one-task) |
-| Repair CI failures: a failed CI run becomes a job, and a standing grant lets matching repairs start without a new approval each time | `agentsys intake --event failure.json` | [Feeding events in](docs/OPERATING.md#feeding-events-in) |
+| Repair CI (continuous integration) failures: a failed CI run becomes a job, and a standing grant lets matching repairs start without a new approval each time | `agentsys intake --event failure.json` | [Feeding events in](docs/OPERATING.md#feeding-events-in) |
 | Watch and steer in a local console in your browser, or print the same board in a terminal | `agentsys ui --repo <path>` | [Local control UI](docs/CONTROL-UI.md) |
 | Connect a local agent to a stdio MCP (Model Context Protocol) server that reads status, jobs, usage, readiness, evaluation, and evidence, and can dispatch inside authority you already gave | `agentsys-mcp` | [Local MCP server](docs/MCP.md) |
 | Keep evidence for every run, count outcomes, and replay frozen cases to compare configurations | `agentsys scorecards` | [Evidence and evaluation](docs/OPERATING.md#evidence-and-evaluation) |
@@ -156,7 +156,7 @@ npm test
 npm run test:ui      # browser tests (requires: npx playwright install chromium)
 ```
 
-`npm test` also checks this README and the agent guide against the CLI: every command and flag they show must exist, the safe ones run in a temporary state directory, and every link must resolve. [docs/READER-TASKS.md](docs/READER-TASKS.md) lists the tasks readers do with these documents. See [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
+`npm test` also checks this README and the agent guide against the command-line tool: every command and flag they show must exist, the safe ones run in a temporary state directory, and every link must resolve. [docs/READER-TASKS.md](docs/READER-TASKS.md) lists the tasks readers do with these documents. See [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
 
 The console screenshots in `docs/console-screens/` come from `ui-tests/console.spec.ts` (`npm run test:ui`), which writes them to `test-results/console-screens/`. [docs/CONTROL-UI.md](docs/CONTROL-UI.md#verification) has the copy command. The page's link preview `site/og.png` and the opening picture `site/loop.png` come from `ui-tests/site.spec.ts`; its header has the copy commands.
 
