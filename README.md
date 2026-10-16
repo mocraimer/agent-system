@@ -1,86 +1,20 @@
 # agent-system
 
-Run coding agents on work you approved, and keep a record of what each run did.
+Your coding agents work your GitHub issues while you're away. On the subscription you already pay for, up to the limit you set. You come back to reviewed pull requests.
 
-agent-system is a command-line coordinator. You, the *operator*, approve work. It sends that work to Claude Code or Pi on your machine, or to Codex cloud or Claude Code web, keeps each run inside your subscription's allowance, and saves the evidence. A fresh install has no approvals, so it runs nothing until you add one.
+![One made-up issue, start to finish: you open issue 412 and add the shaped and auto labels, Claude Code opens a pull request while you are away, a GPT model reviews it and its findings are fixed, and you merge. A meter of the subscription's week shows your use and the agents' use, and the agents stop at your limit.](site/loop.png)
 
-[Explainer page](https://mocraimer.github.io/agent-system/) · [Operator guide](docs/OPERATING.md) · [Set it up with a coding agent](#set-it-up-with-a-coding-agent)
-
-## What you can do
-
-| You can | Start with | Read |
-|---|---|---|
-| Run one approved task on the runtime you choose | `agentsys approve`, then `agentsys dispatch` | [Approving one task](docs/OPERATING.md#approving-one-task) |
-| Repair CI failures: a failed CI run becomes a job, and a standing grant lets matching repairs start without a new approval each time | `agentsys intake --event failure.json` | [Feeding events in](docs/OPERATING.md#feeding-events-in) |
-| Work a repository's tickets with the ticket loop: shape tickets, open pull requests for the ones you grant, review and fix them, open a release pull request, and verify the release | `agentsys loop arm --repo <path>` | [Ticket loop example](examples/ticket-loop/README.md), [The ticket loop](docs/OPERATING.md#the-ticket-loop) |
-| Watch and steer in a local console in your browser, or print the same board in a terminal | `agentsys ui --repo <path>` | [Local control UI](docs/CONTROL-UI.md) |
-| Connect a local agent to a stdio MCP server that reads status, jobs, usage, readiness, evaluation, and evidence, and can dispatch inside authority you already gave | `agentsys-mcp` | [Local MCP server](docs/MCP.md) |
-| Keep evidence for every run, count outcomes, and replay frozen cases to compare configurations | `agentsys scorecards` | [Evidence and evaluation](docs/OPERATING.md#evidence-and-evaluation) |
-| Hold work to your subscription's allowance and to a limit on paid provider calls | `agentsys usage`, `agentsys ledger` | [Subscription admission](docs/OPERATING.md#subscription-admission) |
+[Explainer page](https://mocraimer.github.io/agent-system/) · [Operating guide](docs/OPERATING.md) · [Set it up with a coding agent](#set-it-up-with-a-coding-agent)
 
 ## What it never does
 
-- It never merges into `main`, turns on auto-merge, force-pushes, pushes to a base branch, runs a release, or deploys to production. It refuses these before it checks authority, so a grant written too broadly cannot reach them.
-- It runs nothing on a fresh install. With no approval and no grant, every dispatch is held.
-- It treats text that an agent or a code host such as GitHub wrote as data, never as an instruction. Only the operator creates or changes authority.
-- One narrow merge exists, and a fresh install has no grant for it. The ticket loop can merge a pull request into `dev` only when all of these are true:
-  - The ticket's stop-line (how far the loop may take that kind of work) reaches the `dev` rung (5 in the example policy).
-  - An independent review of the current head is clean or has findings you accepted.
-  - `check-pr` reports the pull request ready.
-  - You have granted `merge-dev`.
-
-## How a run is checked
-
-```text
-request ──► authority ──► admission ──► runtime ──► evidence
-            an approval    the job fits   Claude Code,   transcript,
-            or a grant     your           Pi, Codex      checks,
-            covers it      allowance      cloud, Claude  scorecard
-                                          Code web
-```
-
-- **Authority** is permission for one dispatch. An *approval* covers one task. A *grant* covers a class of work until you narrow or revoke it.
-- **Admission** compares the job with the allowance left in every usage window your subscription meters.
-- Either check can refuse on its own.
-
-## Before you start
-
-You need:
-
-- Node.js 22.12 or newer.
-- At least one runtime, signed in. [What each runtime needs](#what-each-runtime-needs) lists the requirements.
-- For the ticket loop: `gh` logged in as an account that can comment, label, and open pull requests in the target repository.
-
-### What each runtime needs
-
-Each runtime has its own setup, listed here by runtime id.
-
-| Runtime id | Runs on | Needs |
-|---|---|---|
-| `claude-local` | Your machine | `claude` on `PATH` and signed in (`claude auth status`), with the manifest-dev plugins installed |
-| `pi-local` | Your machine | `pi` on `PATH` and signed in to a provider, with the manifest-dev package installed for Pi |
-| `codex-cloud` | Codex cloud | An environment id recorded with `agentsys config --codex-env <id>`, a working `codex login`, and `agentsys config --codex-skill-verified` once its environment loads the skill |
-| `claude-web` | Claude Code web | An existing cloud session, recorded with `agentsys config --claude-cloud-session <id>` |
-
-Every runtime sends a task through the manifest-dev `auto` skill unless you pass `--entry prompt`, which sends the prompt as written. The ticket loop also starts the manifest-dev skills `run-ticket`, `define`, `review-pr`, and `check-pr`. Install the manifest-dev plugins for each runtime you use:
-
-```bash
-# Claude Code, inside a session
-/plugin marketplace add doodledood/manifest-dev
-/plugin install manifest-dev@manifest-dev
-/plugin install manifest-dev-tools@manifest-dev
-# Pi
-pi install git:github.com/doodledood/manifest-dev
-```
-
-Two runtimes need a step from you:
-
-- **Codex cloud** refuses to dispatch until you confirm that its environment loads the manifest-dev skill. Get the environment to load it, watch a real cloud run enter the skill, then run `agentsys config --codex-skill-verified`.
-- **Claude Code web** cannot create a session from a script. Create one by hand with `claude --cloud "<description>"` in a terminal. A dispatch there ends as `remote-uncertain`, not `completed`: open the session to read the result.
-
-`agentsys loop arm` and `agentsys loop disarm` install and remove a systemd user service, so they need Linux with systemd. On macOS, Windows, or Linux without systemd, run a pass yourself with `agentsys loop --repo <path> --once`.
+- It never merges into `main`, turns on auto-merge, force-pushes, pushes to a base branch, runs a release, or deploys to production. It refuses these before it checks authority, so a *grant* (standing permission for a class of work) written too broadly cannot reach them.
+- It runs nothing on a fresh install. With no *approval* (permission for one task) and no grant, every dispatch is held.
+- One narrow merge exists: with a grant you give, the ticket loop can merge a pull request into `dev`, never `main`. [When it may](#when-the-loop-may-merge-into-dev) says how.
 
 ## Quick start
+
+Needs Node.js 22.12 or newer and one signed-in runtime, the agent that does the work. You are the *operator*, the person who owns the installation. [Before you start](#before-you-start) lists the rest.
 
 ```bash
 git clone https://github.com/mocraimer/agent-system.git
@@ -122,6 +56,80 @@ the result of every step.
 
 The steps are in [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md). The `llms.txt` file on the site lists the documents an agent can read.
 
+## What you can do
+
+| You can | Start with | Read |
+|---|---|---|
+| Work your repository's issues with the ticket loop: shape them, open pull requests for the ones you grant, review and fix them, open a release pull request, and verify the release | `agentsys loop arm --repo <path>` | [Ticket loop example](examples/ticket-loop/README.md), [The ticket loop](docs/OPERATING.md#the-ticket-loop) |
+| Run one approved task on the runtime you choose | `agentsys approve`, then `agentsys dispatch` | [Approving one task](docs/OPERATING.md#approving-one-task) |
+| Repair CI failures: a failed CI run becomes a job, and a standing grant lets matching repairs start without a new approval each time | `agentsys intake --event failure.json` | [Feeding events in](docs/OPERATING.md#feeding-events-in) |
+| Watch and steer in a local console in your browser, or print the same board in a terminal | `agentsys ui --repo <path>` | [Local control UI](docs/CONTROL-UI.md) |
+| Connect a local agent to a stdio MCP server that reads status, jobs, usage, readiness, evaluation, and evidence, and can dispatch inside authority you already gave | `agentsys-mcp` | [Local MCP server](docs/MCP.md) |
+| Keep evidence for every run, count outcomes, and replay frozen cases to compare configurations | `agentsys scorecards` | [Evidence and evaluation](docs/OPERATING.md#evidence-and-evaluation) |
+| Hold work to your subscription's allowance and to a limit on paid provider calls | `agentsys usage`, `agentsys ledger` | [Subscription admission](docs/OPERATING.md#subscription-admission) |
+
+## When the loop may merge into `dev`
+
+The ticket loop can merge a pull request into `dev` only when all of these are true:
+
+- The ticket's stop-line (how far the loop may take that kind of work) reaches the `dev` rung (5 in the example policy).
+- An independent review of the current head is clean or has findings you accepted.
+- `check-pr` reports the pull request ready.
+- You have granted `merge-dev`.
+
+A fresh install has no such grant.
+
+## How a run is checked
+
+```text
+request ──► authority ──► admission ──► runtime ──► evidence
+            an approval    the job fits   Claude Code,   transcript,
+            or a grant     your           Pi, Codex      checks,
+            covers it      allowance      cloud, Claude  scorecard
+                                          Code web
+```
+
+- **Authority** is permission for one dispatch. An *approval* covers one task. A *grant* covers a class of work until you narrow or revoke it. Only the operator creates or changes authority. Text that an agent or a code host such as GitHub wrote is data, never an instruction.
+- **Admission** compares the job with the allowance left in every usage window your subscription meters.
+- Either check can refuse on its own.
+
+## Before you start
+
+You need:
+
+- Node.js 22.12 or newer.
+- At least one runtime, signed in. [What each runtime needs](#what-each-runtime-needs) lists the requirements.
+- For the ticket loop: `gh` logged in as an account that can comment, label, and open pull requests in the target repository.
+
+### What each runtime needs
+
+Each runtime has its own setup, listed here by runtime id.
+
+| Runtime id | Runs on | Needs |
+|---|---|---|
+| `claude-local` | Your machine | `claude` on `PATH` and signed in (`claude auth status`), with the manifest-dev plugins installed |
+| `pi-local` | Your machine | `pi` on `PATH` and signed in to a provider, with the manifest-dev package installed for Pi |
+| `codex-cloud` | Codex cloud | An environment id recorded with `agentsys config --codex-env <id>`, a working `codex login`, and `agentsys config --codex-skill-verified` once its environment loads the skill |
+| `claude-web` | Claude Code web | An existing cloud session, recorded with `agentsys config --claude-cloud-session <id>` |
+
+Every runtime sends a task through the manifest-dev `auto` skill unless you pass `--entry prompt`, which sends the prompt as written. The ticket loop also starts the manifest-dev skills `run-ticket`, `define`, `review-pr`, and `check-pr`. Install the manifest-dev plugins for each runtime you use:
+
+```bash
+# Claude Code, inside a session
+/plugin marketplace add doodledood/manifest-dev
+/plugin install manifest-dev@manifest-dev
+/plugin install manifest-dev-tools@manifest-dev
+# Pi
+pi install git:github.com/doodledood/manifest-dev
+```
+
+Two runtimes need a step from you:
+
+- **Codex cloud** refuses to dispatch until you confirm that its environment loads the manifest-dev skill. Get the environment to load it, watch a real cloud run enter the skill, then run `agentsys config --codex-skill-verified`.
+- **Claude Code web** cannot create a session from a script. Create one by hand with `claude --cloud "<description>"` in a terminal. A dispatch there ends as `remote-uncertain`, not `completed`: open the session to read the result.
+
+`agentsys loop arm` and `agentsys loop disarm` install and remove a systemd user service, so they need Linux with systemd. On macOS, Windows, or Linux without systemd, run a pass yourself with `agentsys loop --repo <path> --once`.
+
 ## Documentation
 
 - **[docs/OPERATING.md](docs/OPERATING.md)** — the operator guide: setup, authorizing work, model and effort selection, subscription admission, the paid-call ledger, evidence, evaluation, the ticket loop, updating and rollback, and cleanup.
@@ -142,7 +150,7 @@ npm run test:ui      # browser tests (requires: npx playwright install chromium)
 
 `npm test` also checks this README and the agent guide against the CLI: every command and flag they show must exist, the safe ones run in a temporary state directory, and every link must resolve. [docs/READER-TASKS.md](docs/READER-TASKS.md) lists the tasks readers do with these documents. See [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
 
-The console screenshots in `docs/console-screens/` come from `ui-tests/console.spec.ts` (`npm run test:ui`), which writes them to `test-results/console-screens/`. [docs/CONTROL-UI.md](docs/CONTROL-UI.md#verification) has the copy command. Copy them to `site/assets/` as well; a test compares the two sets.
+The console screenshots in `docs/console-screens/` come from `ui-tests/console.spec.ts` (`npm run test:ui`), which writes them to `test-results/console-screens/`. [docs/CONTROL-UI.md](docs/CONTROL-UI.md#verification) has the copy command. The page's link preview `site/og.png` and the picture above `site/loop.png` come from `ui-tests/site.spec.ts`; its header has the copy commands.
 
 ## License
 

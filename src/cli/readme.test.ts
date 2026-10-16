@@ -605,4 +605,12 @@ describe('the README can be read in five seconds', () => {
   it('says at most 200 words before its quick start, outside code fences', () => {
     assert.deepEqual(readmeTopProblems(read(README_PATH)), []);
   });
+
+  it("opens with the page's picture, site/loop.png, whose alt text names the merge and the limit", () => {
+    const image = /!\[([^\]]*)\]\(([^)\s]+)\)/.exec(proseOf(read(README_PATH)));
+    assert.ok(image, 'the README shows no image');
+    assert.equal(image[2], 'site/loop.png');
+    assert.match(image[1]!, /merge/i);
+    assert.match(image[1]!, /limit/i);
+  });
 });
