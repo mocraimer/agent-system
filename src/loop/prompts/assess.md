@@ -16,6 +16,17 @@ the deciding output lines verbatim.
 Group the verdicts, give each the evidence it requires, and say plainly when a group is empty, so a
 person can grant and close from your text alone. Write it in Markdown to {{outputPath}}.
 
+After the verdict prose, append one `CLOSE_VERDICT:` line for every ticket you judged should be
+closed, using exactly one of these forms:
+
+    CLOSE_VERDICT: ticket=#N kind=duplicate dup=#M
+    CLOSE_VERDICT: ticket=#N kind=already-done
+    CLOSE_VERDICT: ticket=#N kind=no-longer-true
+
+Replace `#N` with the ticket number and `#M` with the number it duplicates. Write no `CLOSE_VERDICT:`
+line for a ticket you did not judge should be closed, and no line for a ticket that lacks a duplicate
+number (for `kind=duplicate`) or prose evidence in the section above.
+
 Do not add or remove a label, close or reopen anything, edit a ticket, comment, or push. The loop posts
 your text as the one assessment comment.
 

@@ -281,6 +281,9 @@ export function verificationHeads(body: string): string[] {
 
 /* ----------------------------------------------------------------- merged work */
 
+/** Marks the comment the loop posts when it closes a ticket on an assessment verdict. */
+export let VERDICT_CLOSE_MARKER = '';
+
 /** Marks the comment the loop posts when it closes a ticket whose work merged. */
 export let DONE_MARKER = '';
 
@@ -321,6 +324,7 @@ export function useMarkerPrefix(next: string): void {
   DECLINED_MARKER_PREFIX = `<!-- ${next}-loop-declined`;
   DECLINED_MARKER_RE = new RegExp(`<!--\\s*${p}-loop-declined\\s+label=([\\w:-]+)\\s+key=([0-9a-f]{8,64})\\s*-->`, 'gi');
   CLOSE_WARNING_MARKER = `<!-- ${next}-loop-close-warning -->`;
+  VERDICT_CLOSE_MARKER = `<!-- ${next}-loop-verdict-close -->`;
   STATUS_MARKER = `<!-- ${next}-loop-status -->`;
   FAULT_MARKER_RE = new RegExp(`<!--\\s*${p}-loop-fault\\s+fingerprint=([0-9a-f]{16,64})\\s*-->`, 'i');
   VERIFICATION_MARKER_PREFIX = `<!-- ${next}-release-verification`;
