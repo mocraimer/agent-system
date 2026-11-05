@@ -267,6 +267,22 @@ describe('verdict close: AC-4.2 — the close path leaves alone what it must', (
     assert.match(item?.reason ?? '', /no dup number/);
   });
 
+  it('skips an already-done verdict whose assessment gives no evidence for the ticket', async () => {
+    const store = new FakeStore();
+    store.addIssue({ number: 1, labels: ['effort', 'effort:home'] });
+    const body = assessmentBody([68], ['CLOSE_VERDICT: ticket=#68 kind=already-done'])
+      .replace('- #68: some evidence from the checkout', '- evidence that names no ticket');
+    store.addComment(1, body);
+    store.addIssue({ number: 68, labels: ['effort:home'], body: 'no evidence' });
+    const d = deps(store, new FakeCommands(), new FakeRepo(VERDICT_CLOSE_CONFIG));
+    const report = await runPass(d, { dryRun: false, stages: ['close'] });
+    assert.equal(store.issues.find((i) => i.number === 68)?.state, 'OPEN');
+    assert.deepEqual(store.writes.filter((w) => w.target === 68), [], 'no comment without evidence');
+    const item = report.stages[0]!.items.find((i) => i.ref === '#68');
+    assert.equal(item?.decision, 'skip');
+    assert.match(item?.reason ?? '', /no prose evidence/);
+  });
+
   it('skips when setting is absent (default off)', async () => {
     const { store } = setup([66], ['CLOSE_VERDICT: ticket=#66 kind=already-done'], NO_VERDICT_CLOSE_CONFIG);
     store.addIssue({ number: 66, labels: ['effort:home'], body: 'default off' });
