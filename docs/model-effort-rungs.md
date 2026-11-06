@@ -22,7 +22,7 @@ rows live in `tickets/store-config.md` ("Stage tiers"); this section records wha
 | shape | `claude-opus-5-5` · xhigh | `gpt-6.1-sol` · max |
 | assess, sweep, fix, check, improve | `claude-sonnet-5-5` · high | `gpt-6.1-terra` · high |
 
-`gpt-6.1-terra` pairs with Sonnet on the stages Sonnet runs, as the owner's call (2026-11-06); it has no scored rung on this page, so nothing here backs it beyond that choice. Claude Fable 5.1 and `gpt-6-astra` are deliberately not added to the stage options.
+`gpt-6.1-terra` pairs with Sonnet on the stages Sonnet runs, as the owner's call (2026-11-06); it has no scored rung on this page, so nothing here backs it beyond that choice. Claude Fable 5.1 is deliberately not added, and `gpt-6-astra` is dropped from the review ladder.
 
 Reviews keep the rule that a model of the other family reviews. `gpt-6.1-sol` · max is now the first
 GPT reviewer of Claude-written pull requests, in place of `gpt-6-sol` · high; the other review rows
