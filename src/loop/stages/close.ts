@@ -171,10 +171,14 @@ export function parseCloseVerdicts(body: string): CloseVerdict[] {
   return out;
 }
 
-/** True when the assessment body has prose evidence for ticket #N beyond the CLOSE_VERDICT lines. */
-function hasProseEvidence(body: string, ticketNumber: number): boolean {
-  const withoutVerdictLines = body.split('\n').filter((l) => !/^CLOSE_VERDICT:/.test(l.trim())).join('\n');
-  return new RegExp(`#${ticketNumber}(?!\\d)`).test(withoutVerdictLines);
+/**
+ * The assessment's prose lines that name ticket #N, CLOSE_VERDICT lines left out.
+ * The close comment copies them, because the next assessment rewrites the
+ * comment they came from.
+ */
+function proseEvidence(body: string, ticketNumber: number): string[] {
+  const names = new RegExp(`#${ticketNumber}(?!\\d)`);
+  return body.split('\n').filter((l) => !/^CLOSE_VERDICT:/.test(l.trim()) && names.test(l));
 }
 
 async function planVerdictCloses(ctx: PassContext, plan: StagePlan): Promise<void> {
@@ -222,7 +226,8 @@ async function planVerdictCloses(ctx: PassContext, plan: StagePlan): Promise<voi
         skip(issue.labels.includes('auto') ? 'auto label' : 'escalated label'); continue;
       }
       if (v.kind === 'duplicate' && v.dup === undefined) { skip('duplicate verdict has no dup number'); continue; }
-      if (v.kind !== 'duplicate' && !hasProseEvidence(assessmentComment.body, v.ticket)) {
+      const evidence = proseEvidence(assessmentComment.body, v.ticket);
+      if (v.kind !== 'duplicate' && evidence.length === 0) {
         skip('no prose evidence in assessment'); continue;
       }
 
@@ -245,7 +250,13 @@ async function planVerdictCloses(ctx: PassContext, plan: StagePlan): Promise<voi
               lines.push(`Closing as not planned: the current assessment judges this ticket no longer true.`);
             }
             lines.push('');
-            lines.push(`Evidence is in the assessment comment (comment ${assessmentComment.id} in #${tracking.number}).`);
+            if (evidence.length > 0) {
+              lines.push(`The assessment's evidence for this ticket (comment ${assessmentComment.id} in #${tracking.number}, as it read in pass ${ctx.passId}):`);
+              lines.push('');
+              for (const line of evidence) lines.push(`> ${line.trim()}`);
+            } else {
+              lines.push(`The assessment is comment ${assessmentComment.id} in #${tracking.number}.`);
+            }
             lines.push('');
             lines.push(`The coordinator's loop closed this ticket in pass ${ctx.passId} under \`close on assessment verdict: yes\` in the store configuration (\`tickets/store-config.md\`, *Loop limits*).`);
             await ctx.store.createComment(issue.number, lines.join('\n'));

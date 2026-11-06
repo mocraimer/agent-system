@@ -120,6 +120,7 @@ describe('verdict close: AC-4.1 — a current close verdict closes the ticket in
     const c = (store.commentsBy.get(43) ?? []).find((c) => c.body.includes(VERDICT_CLOSE_MARKER));
     assert.ok(c, 'verdict close comment posted');
     assert.match(c!.body, /already done/, 'comment states the kind');
+    assert.match(c!.body, /> - #43: some evidence from the checkout/, 'comment carries the evidence, not only a link');
     assert.equal(store.writes.find((w) => w.kind === 'close' && w.target === 43)?.body, 'not planned');
   });
 
