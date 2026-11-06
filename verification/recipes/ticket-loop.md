@@ -20,7 +20,10 @@ a deployed release, all under the target's store configuration.
 ### unit
 Run: `npm run --silent build && node --test dist/loop/*.test.js`
 Proves: every stage against a fake store and fake git, the shipped example store configuration
-with the built-in queue rules, markers, ranking, operator labels and outside pull requests.
+with the built-in queue rules, markers, ranking, operator labels and outside pull requests, the
+pull request status comment (one editable comment that says why a pull request is blocked or stopped,
+and changes only when the situation does) and the review record comment's layout, which fix and merge
+still read.
 
 ### dry-run-live
 Run: `test -n "$VERIFY_TARGET_REPO" || { echo "set VERIFY_TARGET_REPO to a target checkout"; exit 3; }; npm run --silent build && node dist/cli/main.js loop --repo "$VERIFY_TARGET_REPO" --once --dry-run`

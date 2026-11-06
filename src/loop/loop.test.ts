@@ -22,8 +22,9 @@ import {
 import {
   CLOSE_WARNING_MARKER, fixRounds, LOOP_SIGNATURE, newestReview, parseFixMarkers, parseReviewMarkers, renderAcceptedMarker, renderAppliedMarker,
   renderFaultMarker, renderFixMarker, renderReviewMarker,
-  operatorComment, STATUS_MARKER, ticketsNamedBy, writtenByLoop,
+  operatorComment, parsePrStatus, STATUS_MARKER, ticketsNamedBy, writtenByLoop,
 } from './markers.js';
+import { syncStatusComments } from './status-comment.js';
 import { acquireLoopLock, LoopBusyError, readState, runPass } from './pass.js';
 import type { PassDeps } from './pass.js';
 import { parseStoreConfig, PolicyError, resolveStopLine, stageOptions } from './policy.js';
@@ -3196,5 +3197,102 @@ describe('each work stage chooses between its Claude and its GPT option by the r
     const piFirst = parseStoreConfig(fixtureStoreConfig({ stageRows: [...STAGE_ROWS_TWO_FAMILIES].filter((r) => r.startsWith('| sweep')).reverse().concat(['| shape | claude-local | s | low | 1 | 1 |']) }));
     assert.equal((await authorFamily({ ...pr(store), policy: claudeFirst } as PassContext, store.pulls[0]!)).family, 'claude');
     assert.equal((await authorFamily({ ...pr(store), policy: piFirst } as PassContext, store.pulls[0]!)).family, 'pi');
+  });
+});
+
+// Holds docs/adr/20261106-pull-request-status-is-one-editable-comment.md in whole passes.
+describe('the status comment in a pass', () => {
+  /**
+   * A loop-opened pull request reviewed on the author's own family because the independent tier was
+   * refused. Once that review stands, the next pass is blocked: no independent tier is reachable.
+   */
+  async function blockedSetup(store = new FakeStore()) {
+    store.addIssue({ number: 1, labels: ['effort', 'effort:home'] });
+    store.addIssue({ number: 20, labels: ['type:bug', 'auto', 'shaped', 'effort:home'] });
+    const head = SHA('head-1');
+    store.addPull({ number: 20, headRefOid: head });
+    const commands = new FakeCommands(writing((input) => `review cycle\nREVIEW_RESULT head=${/REVIEW_RESULT head=([0-9a-f]{7,64})/i.exec(input.prompt)?.[1] ?? head} findings=1`));
+    commands.refuse.add('pi-local');
+    const d = deps(store, commands);
+    await runPass(d, { dryRun: false, stages: ['review'] });
+    return { store, d };
+  }
+  const statusOn = (store: FakeStore, n: number) => (store.commentsBy.get(n) ?? []).filter((c) => parsePrStatus(c.body));
+
+  it('explains the blocked label once, and again only when the situation changes', async () => {
+    const { store, d } = await blockedSetup();
+    await runPass(d, REAL);
+    assert.ok(store.pulls[0]!.labels!.includes(STATUS_BLOCKED));
+    assert.equal(statusOn(store, 20).length, 1);
+    assert.match(statusOn(store, 20)[0]!.body, /\*\*Why:\*\* The review exists, but only a reviewer of the author's own model family could run/);
+    const writes = store.writes.length;
+    await runPass(d, REAL);
+    const comments = store.writes.slice(writes).filter((w) => (w.kind === 'comment' || w.kind === 'update-comment') && parsePrStatus(w.body ?? ''));
+    assert.deepEqual(comments, [], 'a second identical pass writes no comment');
+  });
+
+  it('posts the review in the new layout and still hands the fixer the agent\'s summary alone', async () => {
+    const store = new FakeStore();
+    store.addIssue({ number: 1, labels: ['effort', 'effort:home'] });
+    store.addIssue({ number: 20, labels: ['type:bug', 'auto', 'shaped', 'effort:home'] });
+    const head = SHA('head-1');
+    store.addPull({ number: 20, headRefOid: head });
+    const summary = '# review-pr cycle summary\n\n1. [high] ISSUE-ALPHA: the retry loop swallows the 403';
+    const review = new FakeCommands(writing((input) => `${summary}\nREVIEW_RESULT head=${/REVIEW_RESULT head=([0-9a-f]{7,64})/i.exec(input.prompt)?.[1] ?? head} findings=1`));
+    const repo = new FakeRepo(fixtureStoreConfig({ typeRows: ['| `type:bug` | 4 |'] }), { 'origin/ticket/20': head });
+    await runPass(deps(store, review, repo), { dryRun: false, stages: ['review'] });
+    const posted = (store.commentsBy.get(20) ?? []).find((c) => parseReviewMarkers(c.body).length > 0)!;
+    assert.match(posted.body, /^\*\*Review of [0-9a-f]{8}: 1 finding\*\* · independent · model-other-1·high\n\n<details>/);
+    assert.match(posted.body, /\n\*\*Next:\*\* the loop's fix stage addresses the findings/);
+    store.branchHeads.set('ticket/20', SHA('after'));
+    const fixer = workerFix(store, repo, 20, head, '1. done');
+    await runPass(deps(store, fixer, repo), { dryRun: false, stages: ['fix'] });
+    const prompt = fixer.dispatched[0]!.prompt;
+    assert.match(prompt, /ISSUE-ALPHA: the retry loop swallows the 403/);
+    assert.doesNotMatch(prompt, /\*\*Review of|<details>|\*\*Next:\*\*/, 'the loop\'s own wrapper stays out of the fixer\'s brief');
+  });
+
+  it('writes nothing in a dry run, a stage-restricted pass or a pass stopped part-way', async () => {
+    for (const run of [
+      (d: ReturnType<typeof deps>) => runPass(d, { dryRun: true }),
+      (d: ReturnType<typeof deps>) => runPass(d, { dryRun: false, stages: ['review'] }),
+      (d: ReturnType<typeof deps>) => { const stop = new AbortController(); stop.abort(); return runPass({ ...d, signal: stop.signal }, REAL); },
+    ]) {
+      const { store, d } = await blockedSetup();
+      await run(d);
+      assert.deepEqual(statusOn(store, 20), []);
+    }
+  });
+
+  it('does not cost the pass its labels when the comment cannot be written, and writes it on the next', async () => {
+    class CommentHostile extends FakeStore {
+      failing = false;
+      override createComment(n: number, body: string): Promise<number> {
+        return this.failing ? Promise.reject(new Error('HTTP 403')) : super.createComment(n, body);
+      }
+    }
+    const { store, d } = await blockedSetup(new CommentHostile());
+    (store as CommentHostile).failing = true;
+    const lines: string[] = [];
+    await runPass({ ...d, log: (l) => lines.push(l) }, REAL);
+    assert.ok(store.pulls[0]!.labels!.includes(STATUS_BLOCKED), 'the label was still synced');
+    assert.ok(lines.some((l) => /status comment: PR #20 not written: HTTP 403/.test(l)));
+    (store as CommentHostile).failing = false;
+    await runPass(d, REAL);
+    assert.equal(statusOn(store, 20).length, 1);
+  });
+
+  it('changes no stage\'s decision for any pull request', async () => {
+    const decisions = async (withComment: boolean) => {
+      const { store, d } = await blockedSetup();
+      if (withComment) {
+        const blockedPlan: StagePlan = { stage: 'review', items: [{ ref: 'PR #20', decision: { kind: 'blocked', reason: 'reviewed at head, not independent; no independent tier reachable (x)' } }], notes: [], faults: [] };
+        await syncStatusComments(store, store.pulls, 'dev', [blockedPlan], new Date(), 'p');
+        assert.equal(statusOn(store, 20).length, 1);
+      }
+      const report = await runPass(d, { dryRun: true });
+      return report.stages.map((s) => ({ stage: s.stage, items: s.items.map((i) => ({ ref: i.ref, decision: i.decision, reason: i.reason })) }));
+    };
+    assert.deepEqual(await decisions(true), await decisions(false));
   });
 });

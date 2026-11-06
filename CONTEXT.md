@@ -77,6 +77,12 @@ A run whose end nobody has confirmed. It keeps its subscription reservation and 
 attempt at the same job until it is resolved.
 _Avoid_: Failed, completed.
 
+**Pull request status comment**:
+The one comment the loop keeps on a pull request that is blocked or stopped, editing it in place to say
+why the label is what it is and who must act. Not the **status comment** on the tracking issue, which
+reports the whole pass.
+_Avoid_: Status update, label note.
+
 **Knob**:
 A stage on a tier with a prompt digest: the unit the improve stage ranks and proposes one change to
 at a time.

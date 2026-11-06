@@ -11,6 +11,7 @@ import { numericLimit, rung, stageOptions } from '../policy.js';
 import { fixPrompt } from '../prompts.js';
 import { tallyFindings } from '../../console/verdicts.js';
 import type { Comment, PullRequest } from '../github.js';
+import { reviewSummary } from '../review-comment.js';
 import type { Item, OperatorAsk, PassContext, StagePlan } from '../types.js';
 import { ACCEPT_FINDINGS_LABEL, APPLY_COMMENT_LABEL, STATUS_SKIPPED, STATUS_STOPPED } from '../labels.js';
 import type { StatusLabel } from '../labels.js';
@@ -161,7 +162,7 @@ export async function planFix(ctx: PassContext): Promise<StagePlan> {
     // findings and said what they want instead.
     const brief = instruction
       ? `A person reviewing this pull request asked for the following. Do what it asks.\n\n${instruction.body}`
-      : reviewComment!.body;
+      : reviewSummary(reviewComment!.body);
     // The ticket's accepted scope: the shape proposal it was granted on, or the ticket body.
     const ticketNumber = ticketOf(pr);
     let scope: string | undefined;

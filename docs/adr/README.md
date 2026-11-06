@@ -11,3 +11,4 @@
 | 2026-10-15 | [The operator declares which windows a subscription meters; a usage reading never decides it](20261015-subscription-windows-are-declared.md) | Accepted | Admission |
 | 2026-10-15 | [What a runtime does not confirm is recorded as unknown, and requested, resolved and observed settings are kept apart](20261015-unconfirmed-run-settings-are-unknown.md) | Accepted | Run evidence |
 | 2026-10-15 | [Merge, auto-merge, force-push, release and production deploy are refused before authority is consulted](20261015-unsafe-actions-refused-before-authority.md) | Accepted | Authority |
+| 2026-11-06 | [Why a pull request is blocked or stopped is told in one comment the loop edits in place](20261106-pull-request-status-is-one-editable-comment.md) | Accepted | Ticket loop |

@@ -15,6 +15,7 @@ import { listScorecards, recordLoop, recordRepairCycle, recordReview } from '../
 import { short, slugDir, ticketOf } from './context.js';
 import { answerAsks, answerKey, answerOnce } from './operator-answer.js';
 import { ACCEPT_FINDINGS_LABEL, REVIEW_AGAIN_LABEL, syncStatusLabels } from './labels.js';
+import { syncStatusComments } from './status-comment.js';
 import {
   findingsAcceptedAt, LOOP_SIGNATURE, newestReviewRestart, parseFaultMarker, renderAcceptedMarker, renderReviewAgainMarker, ticketsNamedBy, useMarkerPrefix,
 } from './markers.js';
@@ -347,6 +348,13 @@ export async function runPass(deps: PassDeps, options: PassOptions): Promise<Pas
         // A label is how the pass is read, not how it acts: failing to write one
         // must not discard the work the pass already did.
         log(`pass ${passId}: status labels not written: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      // Explanation of the label, never a precondition for it: a comment that cannot be written costs
+      // the comment for this pass and no more.
+      try {
+        for (const line of await syncStatusComments(ctx.store, ctx.pulls, ctx.base, planned, startedAt, passId)) log(line);
+      } catch (err) {
+        log(`pass ${passId}: status comments not written: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
