@@ -44,6 +44,7 @@ export interface NextInput {
 export function reviewNext(i: NextInput): string {
   if (!i.independent) return 'a re-review by an independent tier once one is reachable. This review does not count toward a merge.';
   if (i.draft || i.human) return `left for a person: this pull request is ${i.draft ? 'a draft' : 'marked HUMAN'}, which the loop does not act on.`;
+  if (i.findings === 0 && i.outside) return 'nothing to fix. The loop did not open this pull request and does not merge it, so a person merges.';
   if (i.findings === 0) {
     return i.stopLine < i.mergeRung
       ? 'nothing to fix. The ticket\'s stop-line ends before the merge stage, so a person merges.'

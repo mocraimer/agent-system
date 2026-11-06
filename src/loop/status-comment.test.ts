@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { STATUS_BLOCKED, STATUS_SKIPPED, STATUS_STOPPED, STATUS_WORKING } from './labels.js';
+import { situationsByPull, STATUS_BLOCKED, STATUS_SKIPPED, STATUS_STOPPED, STATUS_WORKING } from './labels.js';
 import { parsePrStatus } from './markers.js';
-import { causeOf, situationsByPull, syncStatusComments } from './status-comment.js';
+import { causeOf, syncStatusComments } from './status-comment.js';
 import { FakeStore, SHA } from './testkit.js';
 import type { Decision, StageName, StagePlan } from './types.js';
 
@@ -95,7 +95,7 @@ describe('the status comment on a pull request', () => {
     assert.doesNotMatch(c!.body, /weekly 6% used|161\.5h|ceiling/, 'the raw admission string is not in the comment');
     assert.doesNotMatch(c!.body, /@/, 'it mentions nobody');
     assert.match(c!.body, /<details>\n<summary>Last changes<\/summary>\n\n- 2026-11-06 07:11 UTC: first seen → blocked \(review: no model tier has room\)/);
-    assert.equal(store.writes.filter((w) => w.kind === 'update-issue' || w.kind === 'pull').length, 0, 'the pull request description is never written');
+    assert.deepEqual(store.writes.map((w) => w.kind), ['comment'], 'one comment, and the pull request description is never written');
   });
 
   it('says who must act and how when a pull request is stopped on a review limit', async () => {
@@ -163,7 +163,7 @@ describe('the status comment on a pull request', () => {
       await syncStatusComments(store, store.pulls, 'dev', [plan('review', [{ ref: 'PR #1', decision: d }])], AT(i), `p${i}`);
     }
     const parsed = parsePrStatus(statusComments(store, 1)[0]!.body)!;
-    assert.equal(parsed.changes.length, 5);
+    assert.deepEqual(parsed.changes.map((c) => c.at), [3, 4, 5, 6, 7].map((m) => AT(m).toISOString()), 'the five newest, not the first five');
     assert.equal(statusComments(store, 1)[0]!.body.split('\n').filter((l) => l.startsWith('- 2026')).length, 5);
   });
 
@@ -195,6 +195,25 @@ describe('the status comment on a pull request', () => {
     const store = setup(1);
     await syncStatusComments(store, store.pulls, 'dev', [plan('review', [{ ref: 'PR #1', decision: blocked(NO_TIER(1, 1)) }])], AT(0), 'p');
     assert.equal(writtenByLoop(statusComments(store, 1)[0]!.body), true);
+  });
+
+  it('does not mistake a quote-reply of the comment for the comment', async () => {
+    const store = setup(1);
+    const plans = (d: Decision) => [plan('review', [{ ref: 'PR #1', decision: d }])];
+    await syncStatusComments(store, store.pulls, 'dev', plans(blocked(NO_TIER(1, 1))), AT(0), 'p');
+    const original = statusComments(store, 1)[0]!;
+    const reply = store.addComment(1, `${original.body.split('\n').map((l) => `> ${l}`).join('\n')}\n\nWhy is this blocked on quota?`, 'a-person');
+    await syncStatusComments(store, store.pulls, 'dev', plans(stopped(REVIEW_LIMIT)), AT(15), 'p2');
+    assert.equal(store.writes.find((w) => w.kind === 'update-comment')?.target, original.id);
+    assert.match(reply.body, /Why is this blocked on quota\?/, 'the person\'s reply is untouched');
+  });
+
+  it('says a person must act when the reason is authority or a runtime that is not ready, not that the loop will retry', () => {
+    for (const reason of ['tier unavailable: pi-local: no authority on pi-local: no grant', 'tier unavailable: claude-local not ready: Claude is not signed in']) {
+      const c = causeOf({ label: STATUS_BLOCKED, stage: 'review', reason });
+      assert.equal(c.cause, 'no-authority');
+      assert.match(c.next, /^Needs you:/);
+    }
   });
 
   it('carries on with the other pull requests when one cannot be written', async () => {

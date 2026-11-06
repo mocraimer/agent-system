@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { PullRequest, Store } from './github.js';
-import { pullRefNumber, STATUS_BLOCKED, STATUS_LABELS, STATUS_SKIPPED, STATUS_STOPPED, STATUS_WORKING } from './labels.js';
-import type { StatusLabel } from './labels.js';
-import { LOOP_SIGNATURE, parsePrStatus, renderPrStatusChange, renderPrStatusState, PR_STATUS_MARKER_PREFIX } from './markers.js';
+import { situationsByPull, STATUS_BLOCKED, STATUS_SKIPPED, STATUS_STOPPED, STATUS_WORKING } from './labels.js';
+import type { Situation } from './labels.js';
+import { LOOP_SIGNATURE, parsePrStatus, writtenByLoop, renderPrStatusChange, renderPrStatusState } from './markers.js';
 import type { PrStatusChange } from './markers.js';
-import type { Decision, StagePlan } from './types.js';
+import type { StagePlan } from './types.js';
 
 /**
  * One editable comment per pull request that says why the loop has it in the state its label shows.
@@ -17,37 +17,11 @@ import type { Decision, StagePlan } from './types.js';
 
 const RECENT = 5;
 
-interface Situation { label: StatusLabel; stage: string; reason: string }
-
 interface Cause { cause: string; why: string; next: string }
-
-const reasonOf = (d: Decision): string => (d.kind === 'dispatch' ? d.detail : d.reason);
 
 /** Digits and whitespace out, so a percentage or a count that moved does not read as a new situation. */
 const normal = (text: string): string => text.replace(/\d+(\.\d+)?/g, '#').replace(/\s+/g, ' ').trim();
 const trim = (text: string, n = 160): string => (text.length > n ? `${text.slice(0, n - 1).trimEnd()}…` : text);
-
-/**
- * The winning situation per pull request: the same one `statusByPull` labels it with, which is the
- * first item in plan order to earn the strongest status.
- */
-export function situationsByPull(plans: readonly StagePlan[]): Map<number, Situation> {
-  const best = new Map<number, Situation>();
-  for (const plan of plans) {
-    for (const item of plan.items) {
-      const number = pullRefNumber(item.ref);
-      if (number === undefined) continue;
-      const d = item.decision;
-      const label = d.kind === 'dispatch' ? STATUS_WORKING : d.kind === 'blocked' ? STATUS_BLOCKED : d.owner;
-      if (!label) continue;
-      const held = best.get(number);
-      if (held === undefined || STATUS_LABELS.indexOf(label) < STATUS_LABELS.indexOf(held.label)) {
-        best.set(number, { label, stage: plan.stage, reason: reasonOf(d) });
-      }
-    }
-  }
-  return best;
-}
 
 /** The short form of each kind of reason, as the change history names it. */
 const SHORT: Record<string, string> = {
@@ -76,11 +50,11 @@ export function causeOf(s: Situation): Cause {
   if (/not independent; no independent tier reachable/.test(reason)) {
     return { cause: 'no-independent-tier', why: 'The review exists, but only a reviewer of the author\'s own model family could run, so it does not count toward a merge.', next: wait };
   }
+  if (/no authority (on|for)|not ready:/.test(reason)) {
+    return { cause: 'no-authority', why: `The loop has no authority, or the runtime is not ready, for what the ${stage} stage wants to do.`, next: 'Needs you: issue the grant or approval that covers it, fix the runtime\'s setup, or do the step yourself.' };
+  }
   if (label === STATUS_BLOCKED && /tier unavailable|no reachable tier|no tier produced|admission/i.test(reason)) {
     return { cause: 'no-tier', why: `The ${stage} stage wanted to act, and no model tier could start (quota, concurrency or no reachable tier).`, next: `${wait} If it lasts past the quota reset, check the subscription windows.` };
-  }
-  if (/^no authority for/.test(reason)) {
-    return { cause: 'no-authority', why: `The loop has no authority for what the ${stage} stage wants to do.`, next: 'Needs you: issue the grant or approval that covers it, or do the step yourself.' };
   }
   if (label === STATUS_BLOCKED && (stage === 'verify' || stage === 'release')) {
     return { cause: 'release-check', why: 'The release deployment or its post-deploy checks failed, or their state is unclear.', next: 'Needs you: inspect the failed deployment or the verification comment, then resolve it.' };
@@ -89,7 +63,7 @@ export function causeOf(s: Situation): Cause {
     return { cause: 'review-limit', why: 'The loop has reviewed this pull request, which it did not open, up to its review limit.', next: 'Needs you: add the `review-again` label to allow more reviews, or review it yourself.' };
   }
   if (/does not cover the current PR description/.test(reason)) {
-    return { cause: 'stale-review', why: 'The latest review was written for an older description of this pull request.', next: 'The loop re-reviews on a later pass. Nothing is needed unless this lasts.' };
+    return { cause: 'stale-review', why: 'The latest review was written for an older description of this pull request.', next: 'The loop re-reviews on its next pass. If this repeats over several passes, look at the latest review comment.' };
   }
   if (/^stop-line \d+ (below|<)/.test(reason)) {
     return { cause: 'stop-line', why: `This ticket type's stop-line ends before the ${stage} stage.`, next: 'Needs you: take this step yourself, or raise the stop-line in `tickets/store-config.md`.' };
@@ -163,7 +137,7 @@ export async function syncStatusComments(
     const cause = sit ? causeOf(sit) : NO_OPINION;
     try {
       const comments = await store.comments(pr.number);
-      const existing = comments.filter((c) => c.body.includes(PR_STATUS_MARKER_PREFIX) && parsePrStatus(c.body)).at(-1);
+      const existing = comments.filter((c) => writtenByLoop(c.body) && parsePrStatus(c.body)).at(-1);
       const held = existing ? parsePrStatus(existing.body) : undefined;
       if (!held) {
         if (!sit || (label !== STATUS_BLOCKED && label !== STATUS_STOPPED)) continue;

@@ -54,4 +54,4 @@ decision changes because the comment exists). Whether the Why reads well stays j
 
 ## Source
 - Session: figure-out on the loop's label transitions, 2026-11-06
-- Related: See also 20261015-loop-policy-read-from-target-base.md
+- Related: See also 20261015-loop-policy-read-from-target-base

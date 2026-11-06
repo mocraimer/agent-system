@@ -74,6 +74,9 @@ describe('what the review comment says comes next', () => {
     assert.match(n, /^a re-review by an independent tier/);
     assert.doesNotMatch(n, /merge stage takes it/);
   });
+  it('leaves the merge of a clean outside pull request to a person', () => {
+    assert.match(reviewNext({ ...base, findings: 0, outside: true, stopLine: 5 }), /does not merge it, so a person merges/);
+  });
   it('sends a clean review to the merge stage, or to a person past the stop-line', () => {
     assert.match(reviewNext({ ...base, findings: 0, stopLine: 5 }), /merge stage takes it from here/);
     assert.match(reviewNext({ ...base, findings: 0, stopLine: 3, mergeRung: 5 }), /a person merges/);

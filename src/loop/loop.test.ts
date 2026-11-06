@@ -24,7 +24,7 @@ import {
   renderFaultMarker, renderFixMarker, renderReviewMarker,
   operatorComment, parsePrStatus, STATUS_MARKER, ticketsNamedBy, writtenByLoop,
 } from './markers.js';
-import { syncStatusComments } from './status-comment.js';
+import { causeOf, syncStatusComments } from './status-comment.js';
 import { acquireLoopLock, LoopBusyError, readState, runPass } from './pass.js';
 import type { PassDeps } from './pass.js';
 import { parseStoreConfig, PolicyError, resolveStopLine, stageOptions } from './policy.js';
@@ -687,6 +687,7 @@ describe('the fix stage', () => {
     const fix = await runPass(d, { dryRun: false, stages: ['fix'] });
     assert.equal(d.commands.dispatched.length, 0, 'a verified body-only repair is not dispatched a second time before review');
     assert.match(fix.stages[0]!.items[0]!.reason, /review does not cover the current PR description/);
+    assert.equal(causeOf({ label: STATUS_STOPPED, stage: fix.stages[0]!.stage, reason: fix.stages[0]!.items[0]!.reason }).cause, 'stale-review', 'the status comment names the stage\'s real reason');
     const review = await runPass(d, { dryRun: true, stages: ['review'] });
     assert.equal(review.stages[0]!.items[0]!.decision, 'dispatch', 'the same-head review is stale after a verified description repair');
   });
@@ -729,6 +730,7 @@ describe('the fix stage', () => {
     const report = await runPass(d, { dryRun: false, stages: ['fix'] });
     assert.equal(d.commands.dispatched.length, 0);
     assert.match(report.stages[0]!.items[0]!.reason, /round cap reached \(2\/2\)/);
+    assert.equal(causeOf({ label: STATUS_STOPPED, stage: report.stages[0]!.stage, reason: report.stages[0]!.items[0]!.reason }).cause, 'round-cap', 'the status comment names the stage\'s real reason');
   });
 
   it('stops when the last fix run left the head where it was', async () => {
@@ -736,6 +738,7 @@ describe('the fix stage', () => {
     const report = await runPass(d, { dryRun: false, stages: ['fix'] });
     assert.equal(d.commands.dispatched.length, 0);
     assert.match(report.stages[0]!.items[0]!.reason, new RegExp(`no progress.*${head.slice(0, 8)}`));
+    assert.equal(causeOf({ label: STATUS_STOPPED, stage: report.stages[0]!.stage, reason: report.stages[0]!.items[0]!.reason }).cause, 'no-progress', 'the status comment names the stage\'s real reason');
   });
 
   it('posts no reply when the fix run did not finish', async () => {

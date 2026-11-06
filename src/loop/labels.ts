@@ -118,7 +118,18 @@ export function statusOf(decision: Decision): StatusLabel | undefined {
  * contradict another stage's view of the same pull request.
  */
 export function statusByPull(plans: readonly StagePlan[]): Map<number, StatusLabel> {
-  const best = new Map<number, StatusLabel>();
+  return new Map([...situationsByPull(plans)].map(([number, situation]) => [number, situation.label]));
+}
+
+/** The status one pull request carries and the stage and reason of the first decision that earned it. */
+export interface Situation { label: StatusLabel; stage: string; reason: string }
+
+/**
+ * Per pull request, the winning status with where it came from, so a comment can say why the label is
+ * what it is. The one place that picks a winner: a tie keeps the first item in plan order.
+ */
+export function situationsByPull(plans: readonly StagePlan[]): Map<number, Situation> {
+  const best = new Map<number, Situation>();
   for (const plan of plans) {
     for (const item of plan.items) {
       const number = pullRefNumber(item.ref);
@@ -126,7 +137,10 @@ export function statusByPull(plans: readonly StagePlan[]): Map<number, StatusLab
       const status = statusOf(item.decision);
       if (!status) continue;
       const held = best.get(number);
-      if (held === undefined || rank(status) < rank(held)) best.set(number, status);
+      if (held === undefined || rank(status) < rank(held.label)) {
+        const d = item.decision;
+        best.set(number, { label: status, stage: plan.stage, reason: d.kind === 'dispatch' ? d.detail : d.reason });
+      }
     }
   }
   return best;
