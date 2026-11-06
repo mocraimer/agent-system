@@ -48,6 +48,25 @@ pull request into `dev` from `ticket/<n>`, or one with a line starting `Closes #
 A merged ticket carrying `auto` is closed by the loop. A merged ticket without it gets one warning
 comment, and closes after the *Loop limits* row's days unless a person replies or labels it `HUMAN`.
 
+## When an assessment verdict closes its ticket
+
+When `close on assessment verdict` in the *Loop limits* table is `yes`, the loop closes a ticket as
+not planned in the same pass that finds its current assessment saying it should be closed. It posts
+one comment citing the kind (duplicate, already done, or no longer true) and the evidence, then
+closes. The assessment must be current; if any candidate changed since it was written, the pass
+skips verdict closes for that effort. The loop leaves alone tickets with a human assignee, the
+`HUMAN` label, `auto`, or `escalated`.
+
+Granting stays a person's. Only a person applies `shaped` or `auto`.
+
+A loop verdict close does not count as the owner rejecting a shape proposal: the loop writes under
+the owner's login, so the close's actor alone cannot tell them apart. The loop marks every verdict
+close with a hidden `<!-- larkspur-loop-verdict-close -->` comment, and the console's derivation
+uses that marker to skip the `rejected` rule.
+
+Without `close on assessment verdict: yes`, or when the row is absent, verdict closes are off and
+only a person may close a ticket on a verdict.
+
 ## Stop-lines
 
 **Each piece of work goes as far as its stop-line and no further.** A stop-line is a rung on the
@@ -118,6 +137,7 @@ one option per model family; the loop ranks them by weekly room on every pass.
 | status home | effort:launch |
 | close merged tickets labelled | auto |
 | close other merged tickets after days | 3 |
+| close on assessment verdict | yes |
 | reviews per outside pull request | 3 |
 | outside pull request quiet minutes | 30 |
 | improve minimum sample | 10 |

@@ -1,5 +1,5 @@
 import { HUMAN_LABEL } from '../context.js';
-import { CLOSE_WARNING_MARKER, DONE_MARKER, writtenByLoop } from '../markers.js';
+import { CLOSE_WARNING_MARKER, DONE_MARKER, VERDICT_CLOSE_MARKER, writtenByLoop } from '../markers.js';
 import { limit, optionalNumericLimit, resolveStopLine, rung } from '../policy.js';
 import type { Item, PassContext, StagePlan } from '../types.js';
 
@@ -14,6 +14,13 @@ import type { Item, PassContext, StagePlan } from '../types.js';
  * code, so it gets one warning and closes after a grace period unless a person
  * replies or labels it HUMAN; until then it is out of every work queue and listed
  * on the status comment. No model runs here.
+ *
+ * The close stage also acts on "should be closed" verdicts in the current
+ * assessment, when the store configuration enables it with
+ * `close on assessment verdict: yes` in the Loop limits table. For each such
+ * verdict it posts one comment citing the kind and the evidence, then closes
+ * the ticket as not planned. The opt-in is off by default: a missing row, or
+ * any value other than `yes`, leaves verdict closes to a person.
  */
 export async function planClose(ctx: PassContext): Promise<StagePlan> {
   const plan: StagePlan = { stage: 'close', rung: rung(ctx.policy, 'dev'), items: [], notes: [], faults: [] };
@@ -116,5 +123,150 @@ export async function planClose(ctx: PassContext): Promise<StagePlan> {
     };
     plan.items.push(item);
   }
+
+  // Verdict closes: close tickets the current assessment says should be closed.
+  // Off unless the store configuration carries `close on assessment verdict: yes`.
+  const verdictCloseSetting = ctx.policy.limits.get('close on assessment verdict');
+  if (verdictCloseSetting?.value === 'yes') {
+    await planVerdictCloses(ctx, plan);
+  }
+
   return plan;
+}
+
+/**
+ * A single parsed `CLOSE_VERDICT:` line from an assessment comment.
+ *
+ * The assess prompt asks the model to append one line per ticket it judges
+ * should be closed. The close stage reads these lines and acts on them when
+ * the assessment is current and the ticket passes the skip conditions.
+ *
+ * Exported for tests.
+ */
+export interface CloseVerdict {
+  ticket: number;
+  kind: 'duplicate' | 'already-done' | 'no-longer-true';
+  /** Set only for `kind === 'duplicate'`; the ticket this one duplicates. */
+  dup?: number;
+}
+
+/**
+ * Parse every `CLOSE_VERDICT:` line in an assessment comment body.
+ *
+ * Lines that do not match the format are silently ignored; they come from prose
+ * in the assessment and are not machine-readable verdicts.
+ *
+ * Exported for tests.
+ */
+export function parseCloseVerdicts(body: string): CloseVerdict[] {
+  const out: CloseVerdict[] = [];
+  for (const line of body.split('\n')) {
+    const m = /^CLOSE_VERDICT:\s+ticket=#(\d+)\s+kind=(duplicate|already-done|no-longer-true)(?:\s+dup=#(\d+))?/.exec(line.trim());
+    if (!m) continue;
+    const ticket = Number(m[1]);
+    const kind = m[2] as CloseVerdict['kind'];
+    const dup = m[3] !== undefined ? Number(m[3]) : undefined;
+    out.push({ ticket, kind, ...(dup !== undefined ? { dup } : {}) });
+  }
+  return out;
+}
+
+/**
+ * The assessment's prose lines that name ticket #N, CLOSE_VERDICT lines left out.
+ * The close comment copies them, because the next assessment rewrites the
+ * comment they came from.
+ */
+function proseEvidence(body: string, ticketNumber: number): string[] {
+  const names = new RegExp(`#${ticketNumber}(?!\\d)`);
+  return body.split('\n').filter((l) => !/^CLOSE_VERDICT:/.test(l.trim()) && names.test(l));
+}
+
+async function planVerdictCloses(ctx: PassContext, plan: StagePlan): Promise<void> {
+  const { rules } = ctx;
+  const efforts = [...new Set(ctx.issues.flatMap((i) => i.labels.filter((l) => l.startsWith('effort:'))))].sort();
+
+  for (const effort of efforts) {
+    let tracking;
+    try { tracking = rules.trackingIssue(ctx.issues, effort); }
+    catch { continue; }
+
+    const comments = await ctx.comments(tracking.number);
+    const assessmentComment = comments.filter((c) => c.body.includes(rules.MARKER)).pop();
+    if (!assessmentComment) continue;
+
+    // Collect dependency states to match the fingerprint the assess run computed.
+    const candidates = rules.candidates(ctx.issues, effort);
+    const dependencyStates: Record<number, string> = {};
+    for (const n of new Set(candidates.flatMap((i) => rules.dependsOn(i.body)))) {
+      dependencyStates[n] = await ctx.store.issueState(n);
+    }
+
+    const decision = rules.decide({
+      issues: ctx.issues, effortLabel: effort, dependencyStates,
+      devHead: ctx.baseSha, priorComment: assessmentComment.body,
+    });
+    if (decision.shouldRun) continue; // Assessment is stale — skip all verdict closes for this effort.
+
+    const verdicts = parseCloseVerdicts(assessmentComment.body);
+    for (const v of verdicts) {
+      const ref = `#${v.ticket}`;
+      const issue = ctx.issues.find((i) => i.number === v.ticket && i.state === 'OPEN');
+      const skip = (reason: string): void => {
+        plan.items.push({ ref, decision: { kind: 'skip', reason: `verdict close: ${reason}` } });
+      };
+
+      if (!issue) { skip('not among current open issues'); continue; }
+
+      const stopLine = resolveStopLine(ctx.policy, issue.labels);
+
+      if (issue.number === tracking.number) { skip('tracking issue'); continue; }
+      if (issue.assignees.length > 0) { skip(`human assignee (${issue.assignees.join(', ')})`); continue; }
+      if (issue.labels.includes(HUMAN_LABEL)) { skip('HUMAN label'); continue; }
+      if (issue.labels.includes('auto') || issue.labels.includes('escalated')) {
+        skip(issue.labels.includes('auto') ? 'auto label' : 'escalated label'); continue;
+      }
+      if (v.kind === 'duplicate' && v.dup === undefined) { skip('duplicate verdict has no dup number'); continue; }
+      const evidence = proseEvidence(assessmentComment.body, v.ticket);
+      if (v.kind !== 'duplicate' && evidence.length === 0) {
+        skip('no prose evidence in assessment'); continue;
+      }
+
+      const kindLabel = v.kind === 'duplicate' ? `duplicate of #${v.dup}` : v.kind;
+      const item: Item = {
+        ref, stopLine,
+        decision: { kind: 'dispatch', detail: `verdict close: ${kindLabel} (assessment comment ${assessmentComment.id} in #${tracking.number})` },
+        act: async () => {
+          const issueComments = await ctx.comments(issue.number);
+          // A pass that posted the VERDICT_CLOSE comment and then failed to close
+          // leaves it behind; the retry finishes the close without a second comment.
+          const posted = issueComments.find((c) => c.body.includes(VERDICT_CLOSE_MARKER));
+          if (!posted) {
+            const lines = [VERDICT_CLOSE_MARKER];
+            if (v.kind === 'duplicate') {
+              lines.push(`Closing as not planned: this ticket duplicates #${v.dup}.`);
+            } else if (v.kind === 'already-done') {
+              lines.push(`Closing as not planned: the current assessment judges this ticket already done.`);
+            } else {
+              lines.push(`Closing as not planned: the current assessment judges this ticket no longer true.`);
+            }
+            lines.push('');
+            if (evidence.length > 0) {
+              lines.push(`The assessment's evidence for this ticket (comment ${assessmentComment.id} in #${tracking.number}, as it read in pass ${ctx.passId}):`);
+              lines.push('');
+              for (const line of evidence) lines.push(`> ${line.trim()}`);
+            } else {
+              lines.push(`The assessment is comment ${assessmentComment.id} in #${tracking.number}.`);
+            }
+            lines.push('');
+            lines.push(`The coordinator's loop closed this ticket in pass ${ctx.passId} under \`close on assessment verdict: yes\` in the store configuration (\`tickets/store-config.md\`, *Loop limits*).`);
+            await ctx.store.createComment(issue.number, lines.join('\n'));
+          }
+          await ctx.store.closeIssue(issue.number, 'not planned');
+          ctx.log(`close: ${ref} closed on verdict (${kindLabel}; assessment comment ${assessmentComment.id})`);
+          return { produced: true, summary: `closed as not planned on ${kindLabel} verdict (assessment comment ${assessmentComment.id})` };
+        },
+      };
+      plan.items.push(item);
+    }
+  }
 }

@@ -1,5 +1,5 @@
 import type { FeedbackVerdict, Scorecard } from '../eval/scorecard.js';
-import { parseFixMarkers } from '../loop/markers.js';
+import { parseFixMarkers, VERDICT_CLOSE_MARKER } from '../loop/markers.js';
 import type { IssueFact, PullFact, StoreSnapshot } from './snapshot.js';
 
 /**
@@ -171,12 +171,20 @@ export const DERIVATION_RULES: readonly DerivationRule[] = [
   {
     id: 'closed-not-planned',
     stages: ['shape'],
-    reads: 'Closed as not planned, or labeled `wontfix`, after the proposal: rejected.',
+    reads: 'Closed as not planned by a person, or labeled `wontfix`, after the proposal: rejected. A not-planned close the loop posted under a verdict does not count.',
     derive: (card, ctx) => {
       const issue = ctx.issue(numberIn(card.loop!.item) ?? -1);
       if (!issue) return [];
       const close = issue.closes.find((c) => c.reason === 'NOT_PLANNED' && c.at >= card.createdAt);
       if (close) {
+        // The loop closes tickets not planned on a verdict. It writes under the
+        // operator's login, so the actor alone cannot tell the two apart. A loop
+        // verdict close always precedes the GitHub close event with a comment
+        // carrying VERDICT_CLOSE_MARKER; a person's close carries no such comment.
+        const loopVerdictClose = issue.comments.some(
+          (c) => c.body.includes(VERDICT_CLOSE_MARKER) && c.createdAt <= close.at,
+        );
+        if (loopVerdictClose) return [];
         return [{
           verdict: 'rejected',
           detail: `closed not planned by ${close.actor} ${minute(close.at)}`,
