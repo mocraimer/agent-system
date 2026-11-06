@@ -258,6 +258,33 @@ function withoutQuotes(body: string): string {
 
 export let STATUS_MARKER = '';
 
+/**
+ * The loop's per-pull-request status comment: one state marker, plus one change marker per recorded
+ * transition. Apart from STATUS_MARKER, which marks the tracking issue's comment.
+ */
+export let PR_STATUS_MARKER_PREFIX = '';
+let PR_STATUS_MARKER_RE = /$^/g;
+let PR_STATUS_CHANGE_RE = /$^/g;
+
+export interface PrStatusState { label: string; stage: string; cause: string; since: string }
+export interface PrStatusChange { at: string; from: string; to: string; stage: string; cause: string }
+
+export function renderPrStatusState(s: PrStatusState): string {
+  return `${PR_STATUS_MARKER_PREFIX} label=${s.label} stage=${s.stage} cause=${s.cause} since=${s.since} -->`;
+}
+
+export function renderPrStatusChange(c: PrStatusChange): string {
+  return `${PR_STATUS_MARKER_PREFIX}-change at=${c.at} from=${c.from} to=${c.to} stage=${c.stage} cause=${c.cause} -->`;
+}
+
+/** The state and recorded changes in a comment, or undefined when the comment is not a pull request status comment. */
+export function parsePrStatus(body: string): { state: PrStatusState; changes: PrStatusChange[] } | undefined {
+  const m = [...body.matchAll(PR_STATUS_MARKER_RE)].at(-1);
+  if (!m) return undefined;
+  const changes = [...body.matchAll(PR_STATUS_CHANGE_RE)].map((c) => ({ at: c[1]!, from: c[2]!, to: c[3]!, stage: c[4]!, cause: c[5]! }));
+  return { state: { label: m[1]!, stage: m[2]!, cause: m[3]!, since: m[4]! }, changes };
+}
+
 let FAULT_MARKER_RE = /$^/i;
 
 export function renderFaultMarker(fingerprint: string): string {
@@ -326,6 +353,9 @@ export function useMarkerPrefix(next: string): void {
   CLOSE_WARNING_MARKER = `<!-- ${next}-loop-close-warning -->`;
   VERDICT_CLOSE_MARKER = `<!-- ${next}-loop-verdict-close -->`;
   STATUS_MARKER = `<!-- ${next}-loop-status -->`;
+  PR_STATUS_MARKER_PREFIX = `<!-- ${next}-loop-pr-status`;
+  PR_STATUS_MARKER_RE = new RegExp(`<!--\\s*${p}-loop-pr-status\\s+label=(\\S+)\\s+stage=(\\S+)\\s+cause=(\\S+)\\s+since=(\\S+)\\s*-->`, 'g');
+  PR_STATUS_CHANGE_RE = new RegExp(`<!--\\s*${p}-loop-pr-status-change\\s+at=(\\S+)\\s+from=(\\S+)\\s+to=(\\S+)\\s+stage=(\\S+)\\s+cause=(\\S+)\\s*-->`, 'g');
   FAULT_MARKER_RE = new RegExp(`<!--\\s*${p}-loop-fault\\s+fingerprint=([0-9a-f]{16,64})\\s*-->`, 'i');
   VERIFICATION_MARKER_PREFIX = `<!-- ${next}-release-verification`;
   DONE_MARKER = `<!-- ${next}-loop-done -->`;

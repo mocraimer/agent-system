@@ -11,6 +11,7 @@ import {
 import type { Family, LoopPolicy, ReviewTier } from '../policy.js';
 import { familyOf, optionalNumericLimit, reviewTiersFor, rung, tierLabel } from '../policy.js';
 import { reviewPrompt } from '../prompts.js';
+import { renderReviewComment, reviewNext, reviewSummary } from '../review-comment.js';
 import type { ActResult, Fault, Item, PassContext, StagePlan } from '../types.js';
 import { REVIEW_AGAIN_LABEL, STATUS_SKIPPED, STATUS_STOPPED, STATUS_WORKING } from '../labels.js';
 import type { StatusLabel } from '../labels.js';
@@ -262,7 +263,7 @@ export async function planReview(ctx: PassContext): Promise<StagePlan> {
     // answered it at this head without changing code, this is a re-review: previous findings are
     // rechecked, and new ones block only in the change since unless high or critical.
     const priorContext = newest && (!markerAt(newest, head) || answeredWithoutCode) && reviewAt >= 0
-      ? { reviewBody: comments[reviewAt]!.body, head: newest.sha, ...(answeredWithoutCode ? { answer: comments[answeredAt]!.body } : {}) }
+      ? { reviewBody: reviewSummary(comments[reviewAt]!.body), head: newest.sha, ...(answeredWithoutCode ? { answer: comments[answeredAt]!.body } : {}) }
       : undefined;
 
     const item: Item = {
@@ -383,7 +384,16 @@ async function reviewOne(
       // `/review-pr` owns the substantive GitHub review. This comment is only
       // the loop's durable handoff to fix/merge, carrying its cycle summary and
       // the fields those stages need without masquerading as another review.
-      const body = `${text}\n\n${renderReviewMarker({ sha: head, findings, independent, reviewer, bodyDigest })}\n— ${reviewer} on ${tier.runtime}, ${LOOP_SIGNATURE} in pass ${ctx.passId}\n`;
+      const body = renderReviewComment({
+        verdict: { head: short(head), findings, independent, reviewer },
+        summary: text,
+        next: reviewNext({
+          findings, independent, outside: ticketOf(pr) === undefined, draft: pr.isDraft, human: (pr.labels ?? []).includes(HUMAN_LABEL),
+          stopLine, fixRung: rung(ctx.policy, 'clean').number, mergeRung: rung(ctx.policy, 'dev').number,
+        }),
+        marker: renderReviewMarker({ sha: head, findings, independent, reviewer, bodyDigest }),
+        signature: `— ${reviewer} on ${tier.runtime}, ${LOOP_SIGNATURE} in pass ${ctx.passId}`,
+      });
       const commentId = await ctx.store.createComment(pr.number, body);
 
       // Whatever the table says, what ran is what the scorecard reports; a run whose

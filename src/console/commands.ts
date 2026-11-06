@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Actor } from '../core/authority.js';
 import { assertOperator } from '../core/authority.js';
+import { reviewSummary } from '../loop/review-comment.js';
 import type { CoordinatorCommands, DispatchCommandResult, RunStopResult } from '../commands.js';
 import { attemptEvidencePins, listRuns } from '../core/run.js';
 import type { RunRecord } from '../core/run.js';
@@ -270,7 +271,7 @@ export function createConsoleCommands(deps: ConsoleDeps): ConsoleCommands {
           review: {
             commentId: reviewComment.id,
             marker: `findings=${marker.findings} independent=${marker.independent ? 'yes' : 'no'} sha=${marker.sha.slice(0, 8)}${marker.reviewer ? ` reviewer=${marker.reviewer}` : ''}`,
-            text: reviewComment.body.slice(0, 20_000),
+            text: reviewSummary(reviewComment.body).slice(0, 20_000),
           },
         } : {}),
         evidence,
