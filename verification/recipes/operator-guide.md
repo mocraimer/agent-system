@@ -17,7 +17,9 @@ every command `--help` advertises, the defaults it quotes, and the documented se
 ### guide-matches-code
 Run: `npm run --silent build && node --test dist/cli/docs.test.js`
 Proves: outcome labels, command names, admission defaults, the allowance, effort levels, loop
-classifications and the forbidden actions in the guide match the code.
+classifications and the forbidden actions in the guide match the code. The arming commands, the
+per-repository service name and a worker's environment are checked by the ticket-loop and
+dispatch-and-recovery recipes, which run the code the guide describes.
 
 ### documented-setup
 Run: `npm run --silent build && node --test dist/cli/documented-setup.integration.test.js`
