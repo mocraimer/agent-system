@@ -58,7 +58,7 @@ describe('deploy.sh --restart', () => {
       'shift',
       `D=${JSON.stringify(join(dir, 'units'))}`,
       'case "$1" in',
-      '  list-unit-files) cat "$D/enabled" 2>/dev/null; true ;;',
+      '  list-unit-files) grep " enabled$" "$D/enabled" 2>/dev/null; true ;;',
       '  show) cat "$D/pid-$2" 2>/dev/null || echo 0 ;;',
       '  restart) echo "$2" >> "$D/restarted" ;;',
       'esac',
@@ -72,6 +72,7 @@ describe('deploy.sh --restart', () => {
   });
 
   const armed = (...units: string[]): void => writeFileSync(join(dir, 'units', 'enabled'), units.map((u) => `${u} enabled`).join('\n') + '\n');
+  const unitFiles = (lines: string[]): void => writeFileSync(join(dir, 'units', 'enabled'), lines.join('\n') + '\n');
   const restarted = (): string[] => (existsSync(join(dir, 'units', 'restarted')) ? readFileSync(join(dir, 'units', 'restarted'), 'utf8').trim().split('\n') : []);
   const deploy = () => {
     const done = spawnSync('bash', [DEPLOY, '--restart'], {
@@ -111,6 +112,12 @@ describe('deploy.sh --restart', () => {
     writeFileSync(join(dir, 'units', 'pid-agentsys-loop-acme_widgets.service'), '0');
     assert.equal(deploy().code, 0);
     assert.ok(restarted().includes('agentsys-loop-acme_widgets.service'));
+  });
+
+  it('leaves a loop that was disarmed alone', () => {
+    unitFiles(['agentsys-loop-acme_widgets.service enabled', 'agentsys-loop-acme_gadgets.service disabled']);
+    assert.equal(deploy().code, 0);
+    assert.deepEqual(restarted(), ['agentsys-loop-acme_widgets.service']);
   });
 
   it('says so, and succeeds, when no loop is armed', () => {
