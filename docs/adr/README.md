@@ -12,3 +12,5 @@
 | 2026-10-15 | [What a runtime does not confirm is recorded as unknown, and requested, resolved and observed settings are kept apart](20261015-unconfirmed-run-settings-are-unknown.md) | Accepted | Run evidence |
 | 2026-10-15 | [Merge, auto-merge, force-push, release and production deploy are refused before authority is consulted](20261015-unsafe-actions-refused-before-authority.md) | Accepted | Authority |
 | 2026-11-06 | [Why a pull request is blocked or stopped is told in one comment the loop edits in place](20261106-pull-request-status-is-one-editable-comment.md) | Accepted | Ticket loop |
+| 2026-11-17 | [agent-system is judged as a tool for an operator, and adoption is not pursued](20261117-agent-system-is-judged-as-a-tool-for-an-operator.md) | Accepted | Project direction |
+| 2026-11-17 | [agent-system runs its full ticket flow on its own repository, through the same three gates](20261117-agent-system-runs-its-own-ticket-flow.md) | Accepted | Ticket loop |

@@ -118,7 +118,7 @@ describe('a pass over agent-system with main as both the base and the release br
     assert.deepEqual(report.faults, []);
   });
 
-  // Holds the decision in docs/adr/20261115-agent-system-runs-its-own-ticket-flow.md.
+  // Holds the decision in docs/adr/20261117-agent-system-runs-its-own-ticket-flow.md.
   it('merges nothing into main even with every stop-line raised to 5 and a merge grant in place', async () => {
     const store = reviewedTicket();
     const commands = new FakeCommands(); // its authorize() allows every action, merge-dev included
