@@ -783,17 +783,32 @@ One command arms the loop for a repository:
 agentsys loop arm --repo ~/src/larkspur --interval 900
 ```
 
-It writes `loop/armed.json` in the state directory — the repository path, the
+It writes `loop/<owner>_<name>/armed.json` in the state directory — the repository's slug and path, the
 interval in seconds, and an optional `--policy-ref` — installs the user service
-`~/.config/systemd/user/agentsys-loop.service`, and starts it. The service runs
-`agentsys loop --armed`, which reads that file. Run `arm` again to change either
+`~/.config/systemd/user/agentsys-loop-<owner>_<name>.service`, and starts it. The service runs
+`agentsys loop --armed --slug <owner/name>`, which reads that file. Run `arm` again to change either
 value; it rewrites both.
 
+One installation arms any number of repositories. Each has its own record and its own service, so
+arming a second repository leaves the first running, and all of them use the one state directory: one
+ledger, one set of subscription reservations. Their admissions take the same lock, so one loop's
+admission waits for another's.
+
 ```
-agentsys loop disarm                               # stop it and keep it stopped
-journalctl --user -u agentsys-loop.service -f      # watch it
-systemctl --user status agentsys-loop.service      # is it running
+agentsys loop status                               # every armed repository, its service and its last pass
+agentsys loop disarm --repo ~/src/larkspur         # stop that one and keep it stopped
+agentsys loop disarm --repo example-org/larkspur   # the same, by name; alone, it stops the only armed loop
+journalctl --user -u agentsys-loop-example-org_larkspur.service -f   # watch it
+systemctl --user status agentsys-loop-example-org_larkspur.service   # is it running
 ```
+
+If `systemctl` refuses a step, the message names the step, the cause and what is already in place; the
+same `arm` command is safe to run again. Repositories are named by their GitHub origin.
+
+A build before per-repository arming wrote one `loop/armed.json` and one service,
+`agentsys-loop.service`, for a single repository. That loop keeps running after a deploy and
+`agentsys loop status` lists it, marked as armed by an older build. Arming its own repository again
+replaces it with the per-repository record and service; arming another repository leaves it alone.
 
 Stopping ends the current pass after the item it is working on; nothing further starts. A model
 run still in flight is stopped with the service rather than waited for, and the next start's
@@ -806,6 +821,14 @@ enable it (`sudo loginctl enable-linger $USER`; add the `[boot]` line and run
 `wsl --shutdown` from Windows) before relying on the service. The unit records the
 `PATH` of the shell that armed it, because the loop spawns `claude`, `pi`, `gh` and
 `git`, and a user service otherwise starts with a minimal one.
+
+**A worker's environment.** A worker is a process the coordinator starts on this machine to do a
+task: a local `claude` or `pi` run, or a command a stage runs in a worktree on a ticket's behalf, such
+as a project check. It starts with `AGENTSYS_STATE` set to a directory of its own, outside the
+coordinator's state and removed when the run ends, so a worker that runs `agentsys` or a recipe never
+reads or writes the coordinator's ledger, authority or runs. Its `PATH`, `HOME` and the runtimes'
+sign-ins are unchanged. A local run's evidence directory keeps `worker-state.json`, which names the
+directory its worker was given.
 
 To run it by hand instead:
 
@@ -832,13 +855,44 @@ Run it from the agent-system checkout (`AGENTSYS_DEPLOY_DIR` names a non-default
 stops if the checkout has local changes, fetches, and stops before building if `package.json` or
 `package-lock.json` changed, since those need `npm ci` first. Otherwise it copies `dist` to
 `<checkout>-dist-backup-<UTC time>`, fast-forwards to `origin/main` and builds. It restarts the
-service only when `dist/build-identity.json` names the new revision from a clean tree, and only
-when the loop has no model run in flight. A run in flight exits 3: run the script again once the
-journal says `next pass in …`. Without `--restart` it builds and leaves the running loop alone.
-To roll back, copy the backup over `dist` and restart the service.
+armed loops only when `dist/build-identity.json` names the new revision from a clean tree: every
+armed service, `agentsys-loop*.service`, the older single one included. A loop with a model run in
+flight is left alone and the script exits 3 after restarting the rest: run it again once that loop's
+journal says `next pass in …`. Without `--restart` it builds and leaves the running loops alone.
+To roll back, copy the backup over `dist` and restart each armed service (`agentsys loop status` lists
+them).
 
 A change that comes with a policy merge in the target repository follows the guarded procedure
 below instead.
+
+### Running the loop on this repository
+
+agent-system runs its own ticket flow on `mocraimer/agent-system`, beside the product it serves, on the
+one installation. Its policy is `tickets/store-config.md` here. `main` is both the base and the release
+branch and every stop-line is 4, so the loop takes a ticket to a reviewed, clean pull request and a
+person merges it; the merge, release and verify stages have nothing to do, and the loop never merges
+into `main` whatever a grant or stop-line says. The same three acts are the operator's as anywhere:
+`shaped` accepts a proposal, `auto` grants it, and the merge. The loop reviews every open pull request
+against `main` after a quiet period, yours included.
+
+Set it up in this order, after the change that adds it has merged and been deployed:
+
+```
+# 1. The loop gets its own clone, so its fetches and worktrees never touch the checkout you deploy.
+git clone https://github.com/mocraimer/agent-system.git ~/loop/agent-system
+
+# 2. The floor and one grant per stage and runtime, then a dry pass that writes nothing.
+cd /mnt/d/agent-system   # the checkout you run the coordinator from, already built
+OPERATOR=<your operator id> REPO_PATH=~/loop/agent-system SLUG=mocraimer/agent-system \
+  PR_BASE=main READ_ONLY_PROJECT= bash examples/ticket-loop/operator/setup.sh
+
+# 3. Arm it.
+node dist/cli/main.js loop arm --repo ~/loop/agent-system --interval 900
+```
+
+`agentsys config --show` prints the operator id the installation already has. The dry pass lists every
+ticket with a decision and its reason. Then apply `shaped` and `auto` to a ticket on GitHub to let the
+loop work it.
 
 ### Guarded local software and policy upgrade
 
@@ -1018,7 +1072,7 @@ and a commit with neither is read as the family of the first `sweep` row.
 1. Revert the target-repository pull request that put the second rows in `tickets/store-config.md`.
    Do this first: an older build reads only the last row of each stage.
 2. Revert the agent-system pull request.
-3. Restore the `dist` the deploy backed up, and restart `agentsys-loop.service`.
+3. Restore the `dist` the deploy backed up, and restart each armed loop's service.
 4. Revoke the `pi-local` grants with `agentsys grant revoke --as … --id … --reason …`.
 5. Turn the ramp off with `--ramp-hours 0` on each subscription that had one.
 
@@ -1108,7 +1162,7 @@ When someone puts `review-again` on a `ticket/<n>` pull request, the loop takes 
 pull request that no limit applies there.
 
 **Rolling it back.** Revert the agent-system pull request, restore the `dist` the deploy backed up, and
-restart `agentsys-loop.service`. The restart comments stay on the pull requests and are ignored.
+restart each armed loop's service. The restart comments stay on the pull requests and are ignored.
 
 ### Operator labels
 
