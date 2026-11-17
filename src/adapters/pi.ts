@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Outcome } from '../core/outcome.js';
@@ -14,6 +14,8 @@ import type {
   DispatchInput, DispatchResult, RuntimeAdapter, RuntimeCapabilities,
 } from './types.js';
 import { resolveSettings, snapshot, UnsupportedSettingError } from './types.js';
+import { recordWorkerState, workerEnvironment } from '../core/worker-env.js';
+import type { WorkerEnvironment } from '../core/worker-env.js';
 
 /**
  * Where Pi keeps the manifest-dev distribution it loads skills from.
@@ -179,6 +181,15 @@ export class PiAdapter implements RuntimeAdapter {
   }
 
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
+    const worker = workerEnvironment();
+    try {
+      return await this.dispatchIn(input, worker);
+    } finally {
+      worker.dispose();
+    }
+  }
+
+  private async dispatchIn(input: DispatchInput, worker: WorkerEnvironment): Promise<DispatchResult> {
     // The approved tier outranks this adapter's own default and is outranked in
     // turn by what the caller named, which `resolveSettings` prefers.
     const resolved = resolveSettings(this.capabilities, input.settings, {
@@ -202,7 +213,7 @@ export class PiAdapter implements RuntimeAdapter {
       };
     }
 
-    mkdirSync(input.evidenceDir, { recursive: true });
+    const workerState = recordWorkerState(input.evidenceDir, worker);
     const eventLog = join(input.evidenceDir, 'pi-rpc-events.jsonl');
 
     const args = ['--mode', 'rpc'];
@@ -215,7 +226,7 @@ export class PiAdapter implements RuntimeAdapter {
       ? `${this.bin} ${args.join(' ')}  <<< ${message}`
       : `${this.bin} ${args.join(' ')}  <<< <prompt as given>`;
     const proc = spawn(this.bin, args, {
-      cwd: input.repoPath, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
+      cwd: input.repoPath, env: worker.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
     });
 
     // A ChildProcess with no 'error' listener throws on the event loop when the
@@ -476,7 +487,7 @@ export class PiAdapter implements RuntimeAdapter {
       }),
       ...(sessionId ? { sessionId } : {}),
       skill,
-      artifacts: { eventLog },
+      artifacts: { eventLog, workerState },
     };
   }
 

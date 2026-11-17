@@ -78,7 +78,7 @@ describe('claude-local dispatch', () => {
     assert.deepEqual(result.settings.resolved, { model: 'claude-opus-5', effort: 'medium' });
     assert.deepEqual(result.settings.observed, { model: 'claude-opus-5', effort: 'unknown' });
     assert.deepEqual(readdirSync(input.evidenceDir).sort(),
-      ['claude-local-prompt.txt', 'claude-local-stderr.log', 'claude-local-stdout.json']);
+      ['claude-local-prompt.txt', 'claude-local-stderr.log', 'claude-local-stdout.json', 'worker-state.json']);
     assert.equal(readFileSync(join(input.evidenceDir, 'claude-local-stderr.log'), 'utf8'), 'a warning');
     assert.ok(result.sessionId, 'the session id is recorded');
     assert.equal(args[args.indexOf('--session-id') + 1], result.sessionId);
