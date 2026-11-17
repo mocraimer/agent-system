@@ -23,12 +23,12 @@ describe('deploy.sh --restart', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'agentsys-deploy-'));
     const git = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
-    execFileSync('git', ['init', '--quiet', '--bare', join(dir, 'origin.git')]);
+    execFileSync('git', ['init', '--quiet', '--bare', '--initial-branch=main', join(dir, 'origin.git')]);
     checkout = join(dir, 'checkout');
     execFileSync('git', ['clone', '--quiet', join(dir, 'origin.git'), checkout], { stdio: 'ignore' });
     git(checkout, 'config', 'user.email', 'test@example.test');
     git(checkout, 'config', 'user.name', 'test');
-    git(checkout, 'checkout', '--quiet', '-b', 'main');
+    git(checkout, 'symbolic-ref', 'HEAD', 'refs/heads/main');
     writeFileSync(join(checkout, '.gitignore'), 'dist\n');
     writeFileSync(join(checkout, 'package.json'), JSON.stringify({ name: 'scratch', scripts: { build: 'node build.js' } }));
     // The stand-in build records what dist was built from, as scripts/stamp-build.mjs does.
