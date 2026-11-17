@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, it } from 'node:test';
 import {
   DEFAULT_POLICY, activeReservations, admit, getPolicy, listReservations,
@@ -719,5 +721,72 @@ describe('the weekly ramp', () => {
     // Read at the real clock's year, so only the hours-to-reset shape is asserted, not the instant.
     assert.equal(w.resetsAt, text);
     assert.ok(w.rampNote !== undefined);
+  });
+});
+
+describe('two loops admitting against one subscription at the same moment', () => {
+  /**
+   * One process per loop, each asking for fifteen jobs one after another, as a loop
+   * does, on the same state directory and at the same moment as the other. Every
+   * call takes its own fresh reading.
+   */
+  function loopProcess(root: string, tag: string): Promise<number> {
+    const admission = fileURLToPath(new URL('./admission.js', import.meta.url));
+    const script = `
+      const { admit } = await import(${JSON.stringify(admission)});
+      // A real reading is a call to the vendor: it takes long enough for the other loop to arrive.
+      const reading = async () => { await new Promise((r) => setTimeout(r, 15)); return { ok: true, reading: { subscriptionId: 'claude-max', observedAt: new Date().toISOString(), source: 'test', windows: [
+        { kind: 'five-hour', usedPercent: 10, windowDurationMins: 300, vendorLabel: 'primary', resetsAt: '2026-09-09T01:00:00Z' },
+        { kind: 'weekly', usedPercent: 10, windowDurationMins: 10080, vendorLabel: 'secondary', resetsAt: '2026-09-11T01:00:00Z' } ] } }; };
+      const estimate = { fiveHourPercent: 2, weeklyPercent: 1, basis: 'comparable-history', uncertaintyPercent: 1, detail: 'test' };
+      let admitted = 0;
+      for (let i = 0; i < 15; i += 1) {
+        const decision = await admit({ subscriptionId: 'claude-max', taskId: '${tag}-' + i, runId: '${tag}-run-' + i, estimate, readUsage: reading });
+        if (decision.admitted) admitted += 1;
+      }
+      process.stdout.write(String(admitted));`;
+    return new Promise((resolve, reject) => {
+      const proc = spawn(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, AGENTSYS_STATE: root }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      let err = '';
+      proc.stdout.on('data', (d: Buffer) => { out += d.toString('utf8'); });
+      proc.stderr.on('data', (d: Buffer) => { err += d.toString('utf8'); });
+      proc.on('close', (code) => (code === 0 ? resolve(Number(out)) : reject(new Error(`loop process ${tag} exited ${code}: ${err}`))));
+    });
+  }
+
+  it('never admits more than the room left after reservations and the margin', async () => {
+    box = sandbox();
+    // 30 jobs are asked for. A job holds 2% of the five-hour window and 1% of the weekly once
+    // admitted, and needs 3% and 2% free to be admitted (the estimate plus 1 point of uncertainty).
+    // With 10% used and a 5% margin, the five-hour window has 60 - 10 - 5 = 45% to give and the
+    // weekly 40 - 10 - 5 = 25%. A job is admitted while 3 <= 45 - 2n and 2 <= 25 - n for the n
+    // already held, so n runs from 0 to 21: exactly twenty-two jobs fit.
+    const [a, b] = await Promise.all([loopProcess(box.root, 'a'), loopProcess(box.root, 'b')]);
+    assert.equal(a + b, 22);
+    assert.equal(activeReservations(SUB).length, 22);
+    assert.equal(new Set(activeReservations(SUB).map((r) => r.taskId)).size, 22, 'each reservation is for a different job');
+  });
+
+  it('waits for another loop that is admitting against the same subscription', async () => {
+    box = sandbox();
+    const store = fileURLToPath(new URL('./store.js', import.meta.url));
+    // The other loop is inside its admission, holding the subscription's lock for half a second.
+    const script = `
+      const { withLockAsync } = await import(${JSON.stringify(store)});
+      await withLockAsync('admission-claude-max', async () => {
+        process.stdout.write('held\\n');
+        await new Promise((r) => setTimeout(r, 500));
+      });`;
+    const other = spawn(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, AGENTSYS_STATE: box.root }, stdio: ['ignore', 'pipe', 'inherit'] });
+    try {
+      await new Promise<void>((resolve) => other.stdout.once('data', () => resolve()));
+      const startedAt = Date.now();
+      const decision = await admit(req());
+      assert.equal(decision.admitted, true);
+      assert.ok(Date.now() - startedAt >= 400, `admission went ahead while the other loop held the lock (${Date.now() - startedAt} ms)`);
+    } finally {
+      other.kill('SIGKILL');
+    }
   });
 });
