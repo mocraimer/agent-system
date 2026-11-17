@@ -199,14 +199,27 @@ describe('arming a loop for each repository on one installation', () => {
       assert.deepEqual(readdirSync(dirname(unitFile('x'))), ['agentsys-loop-acme_widgets.service']);
     });
 
-    it('stays as it was, and says so, when systemctl will not stop it', () => {
+    it('changes nothing, and says so, when systemctl will not stop it', () => {
       const a = repo('widgets');
       legacyArmed(a);
       const done = cli(['loop', 'arm', '--repo', a], { REFUSE: 'disable' });
       assert.notEqual(done.code, 0);
-      assert.match(done.text, /The old service is still running acme\/widgets\./);
+      assert.match(done.text, /Nothing was changed: agentsys-loop\.service is still running acme\/widgets\./);
       assert.ok(existsSync(join(dir, 'state', 'loop', 'armed.json')), 'the old record is still there');
+      assert.equal(existsSync(record('acme_widgets')), false, 'no second record was written');
+      assert.equal(existsSync(unitFile('agentsys-loop-acme_widgets.service')), false, 'and no second unit');
       assert.ok(!calls().some((c) => c.startsWith('enable')), 'no second loop was started on the same repository');
+      assert.match(cli(['loop', 'status']).out, /^acme\/widgets: agentsys-loop\.service active[^\n]*\n[^\n]*\n$/, 'one loop is listed, the one still running');
+    });
+
+    it('says the old service is gone and the new one is not running when starting the new one is refused', () => {
+      const a = repo('widgets');
+      legacyArmed(a);
+      const done = cli(['loop', 'arm', '--repo', a], { REFUSE: 'enable' });
+      assert.notEqual(done.code, 0);
+      assert.match(done.text, /acme\/widgets is not running yet, and agentsys-loop\.service no longer is\./);
+      assert.equal(cli(['loop', 'arm', '--repo', a]).code, 0, 'the same command finishes the job');
+      assert.equal(calls().at(-1), 'enable --now agentsys-loop-acme_widgets.service');
     });
 
     it('disarms by repository like any other', () => {

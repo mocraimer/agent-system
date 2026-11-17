@@ -220,7 +220,7 @@ async function systemctl(args: string[], step: string, state: string): Promise<s
  * The unit captures this shell's PATH, because the loop spawns `claude`, `pi`,
  * `gh` and `git`, and a user service starts with systemd's minimal PATH.
  *
- * The old single-repository service is retired only when the repository being
+ * The old single-repository service is retired, first, only when the repository being
  * armed is the one it ran, so there is never a second loop on that repository.
  */
 export async function arm(config: ArmedConfig, cliPath: string): Promise<string[]> {
@@ -228,29 +228,36 @@ export async function arm(config: ArmedConfig, cliPath: string): Promise<string[
   const repoPath = resolve(config.repoPath);
   const slug = await new GitRepo(repoPath).slug();
   const unit = unitNameFor(slug);
+  const lines: string[] = [];
+
+  // The old service goes first, before anything is written: if systemctl will not stop it, nothing has
+  // changed and it is still the one loop running this repository.
+  const legacy = readJson<ArmedConfig>(legacyArmedPath());
+  const replacesLegacy = legacy !== undefined && await slugOfPath(legacy.repoPath) === slug;
+  if (replacesLegacy) {
+    await systemctl(['disable', '--now', LEGACY_UNIT], `Stopping the old service ${LEGACY_UNIT}, which ran ${slug}`,
+      `Nothing was changed: ${LEGACY_UNIT} is still running ${slug}.`);
+    lines.push(`Replaced the old service ${LEGACY_UNIT}, which ran ${slug}.`);
+  }
+
   const record: StoredArmed = { ...config, repoPath, slug };
   writeJson(armedPathFor(slug), record);
   mkdirSync(dirname(unitPath(unit)), { recursive: true });
   writeFileSync(unitPath(unit), renderUnit({
     cliPath: resolve(cliPath), nodePath: process.execPath, state, path: process.env['PATH'] ?? '/usr/bin:/bin', repoPath, slug,
   }), 'utf8');
-  const written = `${armedPathFor(slug)} and ${unitPath(unit)} are written; ${slug} is not running yet. Fix the cause and run the same \`agentsys loop arm\` command again.`;
-  await systemctl(['daemon-reload'], 'systemctl --user daemon-reload', written);
-
-  const lines: string[] = [];
-  const legacy = readJson<ArmedConfig>(legacyArmedPath());
-  if (legacy && await slugOfPath(legacy.repoPath) === slug) {
-    await systemctl(['disable', '--now', LEGACY_UNIT], `Stopping the old service ${LEGACY_UNIT}, which ran ${slug}`, `${written} The old service is still running ${slug}.`);
+  if (replacesLegacy) {
     rmSync(legacyArmedPath(), { force: true });
     rmSync(unitPath(LEGACY_UNIT), { force: true });
-    lines.push(`Replaced the old service ${LEGACY_UNIT}, which ran ${slug}.`);
   }
+  const written = `${armedPathFor(slug)} and ${unitPath(unit)} are written; ${slug} is not running yet${replacesLegacy ? `, and ${LEGACY_UNIT} no longer is` : ''}. Fix the cause and run the same \`agentsys loop arm\` command again.`;
+  await systemctl(['daemon-reload'], 'systemctl --user daemon-reload', written);
   await systemctl(['enable', '--now', unit], `Starting ${unit}`, written);
-  lines.unshift(
+  return [
     `Armed ${slug}: ${armedPathFor(slug)} names ${repoPath}, every ${config.intervalSeconds}s${config.policyRef ? `, policy from ${config.policyRef}` : ''}.`,
     `Installed ${unitPath(unit)} and started it. Follow it with: journalctl --user -u ${unit} -f`,
-  );
-  return lines;
+    ...lines,
+  ];
 }
 
 /** Which armed loop an operator meant: `target` is a checkout path or `owner/name`; without one, the only armed loop. */
