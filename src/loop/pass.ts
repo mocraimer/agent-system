@@ -172,7 +172,7 @@ export function coordinatorCommands(factory: AdapterFactory = adapterFor, log: (
       let stderr = '';
       proc.stdout.on('data', (d: Buffer) => { stdout += d.toString('utf8'); });
       proc.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
-      const timer = setTimeout(() => { if (proc.pid !== undefined) killGroup(proc.pid); }, options.timeoutMs);
+      const timer = setTimeout(() => { if (proc.pid !== undefined) killGroup(proc.pid); worker.dispose(); }, options.timeoutMs);
       proc.on('error', (err) => { clearTimeout(timer); worker.dispose(); resolve({ code: null, stdout, stderr: `${stderr}${err.message}` }); });
       proc.on('close', (code) => { clearTimeout(timer); worker.dispose(); resolve({ code, stdout, stderr }); });
     }),

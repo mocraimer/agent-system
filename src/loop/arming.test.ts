@@ -222,6 +222,16 @@ describe('arming a loop for each repository on one installation', () => {
       assert.equal(calls().at(-1), 'enable --now agentsys-loop-acme_widgets.service');
     });
 
+    it('refuses, changing nothing, when its checkout is gone and so cannot be told apart from the repository being armed', () => {
+      legacyArmed(join(dir, 'gone'));
+      const done = cli(['loop', 'arm', '--repo', repo('widgets')]);
+      assert.notEqual(done.code, 0);
+      assert.match(done.text, /agentsys-loop\.service, armed by an older build, names .*gone, which is not a GitHub checkout now/);
+      assert.match(done.text, /Nothing was changed\. Stop it with `systemctl --user disable --now agentsys-loop\.service`/);
+      assert.equal(calls().length, 0);
+      assert.equal(existsSync(record('acme_widgets')), false);
+    });
+
     it('disarms by repository like any other', () => {
       legacyArmed(repo('widgets'));
       assert.equal(cli(['loop', 'disarm', '--repo', 'acme/widgets']).code, 0);

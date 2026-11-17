@@ -233,7 +233,12 @@ export async function arm(config: ArmedConfig, cliPath: string): Promise<string[
   // The old service goes first, before anything is written: if systemctl will not stop it, nothing has
   // changed and it is still the one loop running this repository.
   const legacy = readJson<ArmedConfig>(legacyArmedPath());
-  const replacesLegacy = legacy !== undefined && await slugOfPath(legacy.repoPath) === slug;
+  const legacySlug = legacy ? await slugOfPath(legacy.repoPath) : undefined;
+  if (legacy && legacySlug === undefined) {
+    // Its checkout is gone or has no GitHub origin, so nobody can say whether it runs this repository.
+    throw new ArmingError(`${LEGACY_UNIT}, armed by an older build, names ${legacy.repoPath}, which is not a GitHub checkout now, so it cannot be told apart from ${slug}. Nothing was changed. Stop it with \`systemctl --user disable --now ${LEGACY_UNIT}\`, move ${legacyArmedPath()} aside, and run this command again.`);
+  }
+  const replacesLegacy = legacySlug === slug;
   if (replacesLegacy) {
     await systemctl(['disable', '--now', LEGACY_UNIT], `Stopping the old service ${LEGACY_UNIT}, which ran ${slug}`,
       `Nothing was changed: ${LEGACY_UNIT} is still running ${slug}.`);
