@@ -132,7 +132,7 @@ Two runtimes need a step from you:
 - **Codex cloud** refuses to dispatch until you confirm that its environment loads the manifest-dev skill. Get the environment to load it, watch a real cloud run enter the skill, then run `agentsys config --codex-skill-verified`.
 - **Claude Code web** cannot create a session from a script. Create one by hand with `claude --cloud "<description>"` in a terminal. A dispatch there ends as `remote-uncertain`, not `completed`: open the session to read the result.
 
-`agentsys loop arm` and `agentsys loop disarm` install and remove a systemd user service, so they need Linux with systemd. On macOS, Windows, or Linux without systemd, run a pass yourself with `agentsys loop --repo <path> --once`.
+`agentsys loop arm` and `agentsys loop disarm` install and remove a systemd user service for each repository, so they need Linux with systemd. On macOS, Windows, or Linux without systemd, run a pass yourself with `agentsys loop --repo <path> --once`.
 
 ## Documentation
 

@@ -797,7 +797,8 @@ admission waits for another's.
 ```
 agentsys loop status                               # every armed repository, its service and its last pass
 agentsys loop disarm --repo ~/src/larkspur         # stop that one and keep it stopped
-agentsys loop disarm --repo example-org/larkspur   # the same, by name; alone, it stops the only armed loop
+agentsys loop disarm --repo example-org/larkspur   # the same, by name
+agentsys loop disarm                               # with only one loop armed, --repo can be left out
 journalctl --user -u agentsys-loop-example-org_larkspur.service -f   # watch it
 systemctl --user status agentsys-loop-example-org_larkspur.service   # is it running
 ```
@@ -882,7 +883,7 @@ Set it up in this order, after the change that adds it has merged and been deplo
 git clone https://github.com/mocraimer/agent-system.git ~/loop/agent-system
 
 # 2. The floor and one grant per stage and runtime, then a dry pass that writes nothing.
-cd /mnt/d/agent-system   # the checkout you run the coordinator from, already built
+cd <your agent-system checkout>   # the one you run the coordinator from, already built
 OPERATOR=<your operator id> REPO_PATH=~/loop/agent-system SLUG=mocraimer/agent-system \
   PR_BASE=main READ_ONLY_PROJECT= bash examples/ticket-loop/operator/setup.sh
 
