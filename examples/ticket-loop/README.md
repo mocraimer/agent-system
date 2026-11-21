@@ -47,7 +47,9 @@ requests, reviews and fixes those pull requests, and verifies each release after
 
    It records you as the operator. It sets the floor, which makes integration pull requests target
    `dev` and makes the production cloud project read-only. It creates one standing grant for each
-   loop stage and runtime, then runs a dry pass. Set `SLUG=owner/name` for your repository.
+   loop stage and runtime, then runs a dry pass. Set `SLUG=owner/name` for your repository. On an
+   installation that already has an operator, it leaves the operator alone; `PR_BASE` names the branch
+   pull requests target (default `dev`) and an empty `READ_ONLY_PROJECT` skips the production project.
 
 3. **Read the dry run.** Each stage lists its items with *dispatch*, *skip* or *blocked* and the
    reason. Nothing was written. A stage reported as blocked for want of a grant is a grant
@@ -59,8 +61,9 @@ requests, reviews and fixes those pull requests, and verifies each release after
    node dist/cli/main.js loop arm --repo ~/src/larkspur --interval 900
    ```
 
-   This installs a systemd user service that runs one pass every 15 minutes.
-   `node dist/cli/main.js status --repo ~/src/larkspur` prints the last pass.
+   This installs a systemd user service for this repository that runs one pass every 15 minutes.
+   Arming another repository leaves it running. `node dist/cli/main.js loop status` lists every
+   armed repository, and `node dist/cli/main.js status --repo ~/src/larkspur` prints one's last pass.
    `node dist/cli/main.js ui --repo ~/src/larkspur` opens the board.
 
 5. **Grant work.** The loop drafts a shaped body for each new ticket as a comment. Apply `shaped`

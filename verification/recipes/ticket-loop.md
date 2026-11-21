@@ -1,6 +1,6 @@
 ---
 kind: feature
-covers: src/loop, examples/ticket-loop
+covers: src/loop, examples/ticket-loop, tickets
 ---
 # The ticket loop
 
@@ -10,8 +10,9 @@ a deployed release, all under the target's store configuration.
 
 ## How a user reaches it
 
-- `agentsys loop --repo <checkout> --once [--dry-run] [--stage ...]`, `loop arm|disarm` (a systemd
-  user service), `status --repo`, `evaluation --trust --repo`.
+- `agentsys loop --repo <checkout> --once [--dry-run] [--stage ...]`, `loop arm|disarm|status` (one
+  systemd user service per repository), `status --repo`, `evaluation --trust --repo`.
+- `scripts/deploy.sh --restart`, which restarts every armed loop that has no model run in flight.
 - The target's `tickets/store-config.md` and, optionally, its queue rule modules.
 - Labels on pull requests: `apply-comment`, `accept-findings`, `review-again`.
 
@@ -23,7 +24,14 @@ Proves: every stage against a fake store and fake git, the shipped example store
 with the built-in queue rules, markers, ranking, operator labels and outside pull requests, the
 pull request status comment (one editable comment that says why a pull request is blocked or stopped,
 and changes only when the situation does) and the review record comment's layout, which fix and merge
-still read.
+still read; arming for each repository through the built CLI with `systemctl` stubbed (a second
+repository leaves the first running, a loop an older build armed keeps running until its repository is
+armed again, a refused step says what is in place); `scripts/deploy.sh --restart` on a scratch checkout
+(every armed loop restarted, one with a model run in flight left alone, rollback by restoring the
+backed-up `dist`); a stage's commands starting with a state directory of their own; and this repository's
+own `tickets/store-config.md`: main as both base and release branch, every stop-line 4, the merge,
+release and verify stages doing nothing, and nothing merged into `main` with every stop-line at 5 and a
+merge grant in place.
 
 ### dry-run-live
 Run: `test -n "$VERIFY_TARGET_REPO" || { echo "set VERIFY_TARGET_REPO to a target checkout"; exit 3; }; npm run --silent build && node dist/cli/main.js loop --repo "$VERIFY_TARGET_REPO" --once --dry-run`

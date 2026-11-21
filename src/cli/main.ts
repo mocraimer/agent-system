@@ -45,7 +45,7 @@ import { attestDelivery } from '../loop/attest.js';
 import { useMarkerPrefix } from '../loop/markers.js';
 import { actOnStageItem, coordinatorCommands, lastPass, LoopBusyError, loopDir, passLogTail } from '../loop/pass.js';
 import { parseStoreConfig, PolicyError, STORE_CONFIG_PATH } from '../loop/policy.js';
-import { armedConfigPath, arm, disarm, readArmed, runLoop } from '../loop/runner.js';
+import { ArmingError, arm, armedPathFor, armedStatus, disarm, legacyArmedPath, listArmed, readArmed, runLoop } from '../loop/runner.js';
 import { renderTrust, trustReport } from '../loop/trust.js';
 import type { PassStage } from '../loop/types.js';
 import { STAGES } from '../loop/types.js';
@@ -199,7 +199,7 @@ const HELP = `agentsys — run approved coding-agent tasks and keep the evidence
   loop      --repo <path> [--once] [--dry-run] [--interval <s>] [--policy-ref <ref>]
             [--stage <a,b>] [--release <pr>] [--e2e-worktree <dir>] [--coordinator-repo <path>]
             (--stage improve runs the improve stage now; otherwise it runs on its store-config interval)
-  loop      arm --repo <path> [--interval <s>] [--policy-ref <ref>] | disarm | --armed
+  loop      arm --repo <path> [--interval <s>] [--policy-ref <ref>] | disarm [--repo <path|owner/name>] | status | --armed [--slug <owner/name>]
   evaluation --trust --repo <path> [--policy-ref <ref>]  (per work type and stage, from scorecards)
   console   --repo <path> --print  (the board: every open item's column, the system state, verdicts)
   ui        [--port <n>] [--repo <path> [--store-file <file.json>]]  (local loopback operator UI;
@@ -1072,23 +1072,41 @@ function parseWindows(raw: string | undefined): MeteredWindow[] | undefined {
   return [...new Set(parsed)] as MeteredWindow[];
 }
 
+/** An arming refusal is for the operator to act on: print it as a usage error, without a stack. */
+async function armingStep<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (err) {
+    throw err instanceof ArmingError ? new UsageError(err.message) : err;
+  }
+}
+
 async function loopCommand(sub: string | undefined, flags: Map<string, string | true>): Promise<number> {
   if (sub === 'arm') {
     const interval = optionalNumber(flags, 'interval') ?? 900;
     if (!Number.isInteger(interval) || interval < 60) throw new UsageError('--interval is whole seconds, at least 60.');
     const policyRef = optionalString(flags, 'policy-ref');
-    const lines = await arm({ repoPath: requireString(flags, 'repo'), intervalSeconds: interval, ...(policyRef ? { policyRef } : {}) }, process.argv[1]!);
+    const lines = await armingStep(arm({ repoPath: requireString(flags, 'repo'), intervalSeconds: interval, ...(policyRef ? { policyRef } : {}) }, process.argv[1]!));
     for (const line of lines) console.log(line);
     return 0;
   }
   if (sub === 'disarm') {
-    for (const line of await disarm()) console.log(line);
+    for (const line of await armingStep(disarm(optionalString(flags, 'repo')))) console.log(line);
     return 0;
   }
-  if (sub !== undefined) throw new UsageError(`Unknown loop subcommand "${sub}". Use arm, disarm, or flags alone.`);
+  if (sub === 'status') {
+    for (const line of await armedStatus()) console.log(line);
+    return 0;
+  }
+  if (sub !== undefined) throw new UsageError(`Unknown loop subcommand "${sub}". Use arm, disarm, status, or flags alone.`);
 
-  const armed = flag(flags, 'armed') ? readArmed() : undefined;
-  if (flag(flags, 'armed') && !armed) throw new UsageError(`--armed needs ${armedConfigPath()}; run \`agentsys loop arm\` first.`);
+  const armedSlug = optionalString(flags, 'slug');
+  const armed = flag(flags, 'armed') ? readArmed(armedSlug) : undefined;
+  if (flag(flags, 'armed') && !armed) {
+    const where = armedSlug ? armedPathFor(armedSlug) : legacyArmedPath();
+    const others = (await listArmed()).map((a) => a.slug);
+    throw new UsageError(`--armed needs ${where}; run \`agentsys loop arm --repo <checkout>\` first.${others.length > 0 ? ` Armed: ${others.join(', ')}.` : ''}`);
+  }
   const repoPath = armed?.repoPath ?? requireString(flags, 'repo');
   const interval = armed?.intervalSeconds ?? optionalNumber(flags, 'interval') ?? 900;
   const policyRef = armed?.policyRef ?? optionalString(flags, 'policy-ref');

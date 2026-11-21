@@ -46,6 +46,7 @@ import {
 } from './supervisor.js';
 import type { ActResult, Fault, LoopCommands, PassContext, PassOptions, ReviewedState, StageName, StagePlan } from './types.js';
 import { STAGES } from './types.js';
+import { workerEnvironment } from '../core/worker-env.js';
 
 const PLANNERS: Record<StageName, (ctx: PassContext) => Promise<StagePlan>> = {
   shape: planShape,
@@ -162,15 +163,18 @@ export function coordinatorCommands(factory: AdapterFactory = adapterFor, log: (
     recordReview: (taskId, input) => guarded(`the review for ${taskId}`, () => recordReview(`card_${taskId}`, input)),
     recordRepair: (taskId, input) => guarded(`the repair for ${taskId}`, () => recordRepairCycle(`card_${taskId}`, input)),
     exec: (command, args, options) => new Promise((resolve) => {
+      // What a stage runs in a worktree on a ticket's behalf, a test suite or a
+      // recipe, can run `agentsys`: it gets a state directory of its own.
+      const worker = workerEnvironment({ ...process.env, ...options.env });
       // Its own process group, so a timeout stops a test runner's browsers too.
-      const proc = spawn(command, args, { cwd: options.cwd, env: { ...process.env, ...options.env }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      const proc = spawn(command, args, { cwd: options.cwd, env: worker.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
       let stdout = '';
       let stderr = '';
       proc.stdout.on('data', (d: Buffer) => { stdout += d.toString('utf8'); });
       proc.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
-      const timer = setTimeout(() => { if (proc.pid !== undefined) killGroup(proc.pid); }, options.timeoutMs);
-      proc.on('error', (err) => { clearTimeout(timer); resolve({ code: null, stdout, stderr: `${stderr}${err.message}` }); });
-      proc.on('close', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+      const timer = setTimeout(() => { if (proc.pid !== undefined) killGroup(proc.pid); worker.dispose(); }, options.timeoutMs);
+      proc.on('error', (err) => { clearTimeout(timer); worker.dispose(); resolve({ code: null, stdout, stderr: `${stderr}${err.message}` }); });
+      proc.on('close', (code) => { clearTimeout(timer); worker.dispose(); resolve({ code, stdout, stderr }); });
     }),
   };
 }

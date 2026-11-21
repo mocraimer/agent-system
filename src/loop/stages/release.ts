@@ -14,13 +14,17 @@ import type { Item, PassContext, StagePlan } from '../types.js';
 export async function planRelease(ctx: PassContext): Promise<StagePlan> {
   const stageRung = rung(ctx.policy, 'release');
   const plan: StagePlan = { stage: 'release', rung: stageRung, items: [], notes: [], faults: [] };
+  const releaseBranch = ctx.policy.protocol.releaseBranch.value;
+  if (ctx.base === releaseBranch) {
+    plan.notes.push(`release: the base branch is ${releaseBranch}, the release branch itself, so there is no release pull request to open; this stage does nothing here`);
+    return plan;
+  }
   const due = await releaseDue(ctx, stageRung.number);
   plan.notes.push(
     `release: rule — due when a ticket whose pull request merged into ${ctx.base} since the last release has a stop-line at rung ${stageRung.number} or above, and every workflow run on the ${ctx.base} head succeeded (${stageRung.line})`,
     ...due.lines,
   );
 
-  const releaseBranch = ctx.policy.protocol.releaseBranch.value;
   const [open] = await ctx.store.openPulls(releaseBranch, ctx.base);
   const ref = open ? `PR #${open.number} (${ctx.base} → ${releaseBranch})` : `${ctx.base} → ${releaseBranch}`;
   if (!due.due) {

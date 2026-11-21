@@ -20,7 +20,9 @@ allowance before they run.
 ### unit
 Run: `npm run --silent build && node --test dist/core/admission.test.js dist/core/ledger.test.js dist/core/usage.test.js dist/cli/usage.test.js`
 Proves: thresholds, declared windows, the weekly ramp, unusable or stale readings blocking work,
-reservations outliving the process, and the ledger's reserve, settle and release rules.
+reservations outliving the process, the ledger's reserve, settle and release rules, and that two
+loops on one state directory share one ledger: asked at the same moment, they admit exactly what the
+window has room for, and one waits while the other holds the subscription's admission lock.
 
 ## Gotchas
 

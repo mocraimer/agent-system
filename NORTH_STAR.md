@@ -81,5 +81,6 @@ outside installations run it — and the one count that tracks it, or a ruling t
 
 ## Open
 - Are outside operators the target, or is the public release a by-product of the author's own use?
-  What would fill it: the owner's ruling, or the first outside installations and what they ask for.
-  — 2026-10
+  Judged as a tool for an operator, with adoption not pursued: "if it is adopted great otherwise we are
+  the outside operator".
+  — ruled: docs/adr/20261117-agent-system-is-judged-as-a-tool-for-an-operator.md. 2026-11

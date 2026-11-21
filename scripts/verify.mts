@@ -613,6 +613,7 @@ async function cmdDrive(name: string, only: string | undefined, yes: boolean, dr
       }
       const [path, stamp] = reserve(recipe);
       let written = false;
+      process.env.VERIFY_RUN_EVIDENCE = path;
       try {
         const covers = recipe.covers.length ? fingerprint(recipe.covers) : "";
         console.log(`running [${scenario.name}]: ${scenario.run}`);
@@ -638,6 +639,7 @@ async function cmdDrive(name: string, only: string | undefined, yes: boolean, dr
         console.log(`${outcome}: evidence in ${rel(path)}`);
         if (outcome === "failed" || outcome === "unreachable") worst = 1;
       } finally {
+        delete process.env.VERIFY_RUN_EVIDENCE;
         // A run that did not finish leaves nothing behind to pass for evidence.
         if (!written) rmSync(path, { force: true });
       }
@@ -707,6 +709,9 @@ function checkProblems(): string[] {
         problems.push(error.message);
         continue;
       }
+      // The run that is going on right now has reserved its file and not yet written it. A scenario
+      // that runs `verify check` itself, as the project's own suite does, must not trip over it.
+      if (!found && process.env.VERIFY_RUN_EVIDENCE && resolve(item) === resolve(process.env.VERIFY_RUN_EVIDENCE)) continue;
       if (!found) problems.push(`${rel(item)}: empty — a run that never finished; delete it`);
       else if (found.scenario && !names.has(found.scenario)) {
         problems.push(`${rel(item)}: scenario '${found.scenario}' is not in ${file}`);

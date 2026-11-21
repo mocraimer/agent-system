@@ -14,6 +14,8 @@ import type {
   DispatchInput, DispatchResult, RuntimeAdapter, RuntimeCapabilities,
 } from './types.js';
 import { resolveSettings, snapshot } from './types.js';
+import { recordWorkerState, workerEnvironment } from '../core/worker-env.js';
+import type { WorkerEnvironment } from '../core/worker-env.js';
 
 const run = promisify(execFile);
 
@@ -115,6 +117,15 @@ export class ClaudeLocalAdapter implements RuntimeAdapter {
   }
 
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
+    const worker = workerEnvironment();
+    try {
+      return await this.dispatchIn(input, worker);
+    } finally {
+      worker.dispose();
+    }
+  }
+
+  private async dispatchIn(input: DispatchInput, worker: WorkerEnvironment): Promise<DispatchResult> {
     const resolved = resolveSettings(this.capabilities, input.settings, {
       model: input.approvedTier?.model ?? 'claude-opus-5-5',
       effort: input.approvedTier?.effort ?? 'medium',
@@ -127,7 +138,7 @@ export class ClaudeLocalAdapter implements RuntimeAdapter {
       return { outcome: { ...notReady, taskId: input.taskId, runId: input.runId }, settings: settings() };
     }
 
-    mkdirSync(input.evidenceDir, { recursive: true });
+    const workerState = recordWorkerState(input.evidenceDir, worker);
     const stdoutPath = join(input.evidenceDir, 'claude-local-stdout.json');
     const stderrPath = join(input.evidenceDir, 'claude-local-stderr.log');
     const sessionId = input.sessionId ?? this.newSessionId();
@@ -151,7 +162,7 @@ export class ClaudeLocalAdapter implements RuntimeAdapter {
     writeFileSync(join(input.evidenceDir, 'claude-local-prompt.txt'), message, 'utf8');
     const invocation = `${this.bin} -p <prompt: claude-local-prompt.txt> ${args.slice(2).map(quoteArg).join(' ')}`;
 
-    const exit = await this.runToFiles(args, input, stdoutPath, stderrPath, sessionId);
+    const exit = await this.runToFiles(args, input, stdoutPath, stderrPath, sessionId, worker);
     if (exit.spawnError) {
       return {
         outcome: {
@@ -178,7 +189,7 @@ export class ClaudeLocalAdapter implements RuntimeAdapter {
     if (manifestPath) skill.manifestPath = manifestPath;
     const details = { stdout: stdoutPath, stderr: stderrPath, exitCode: exit.code, signal: exit.signal };
     const reported = reportedModel(parsed?.modelUsage, resolved.model);
-    const base = { settings: settings(reported), sessionId, skill, artifacts: { stdout: stdoutPath, stderr: stderrPath } };
+    const base = { settings: settings(reported), sessionId, skill, artifacts: { stdout: stdoutPath, stderr: stderrPath, workerState } };
 
     if (exit.timedOut || exit.signal) {
       return {
@@ -248,7 +259,7 @@ export class ClaudeLocalAdapter implements RuntimeAdapter {
    * which is what `reconcile` reads.
    */
   private runToFiles(
-    args: string[], input: DispatchInput, stdoutPath: string, stderrPath: string, sessionId: string,
+    args: string[], input: DispatchInput, stdoutPath: string, stderrPath: string, sessionId: string, worker: WorkerEnvironment,
   ): Promise<{ code: number | null; signal: NodeJS.Signals | null; timedOut: boolean; spawnError?: Error }> {
     const out = openSync(stdoutPath, 'w');
     const err = openSync(stderrPath, 'w');
@@ -268,7 +279,7 @@ export class ClaudeLocalAdapter implements RuntimeAdapter {
         resolve({ ...result, timedOut });
       };
       const proc = spawn(this.bin, args, {
-        cwd: input.repoPath, stdio: ['ignore', out, err], detached: true,
+        cwd: input.repoPath, env: worker.env, stdio: ['ignore', out, err], detached: true,
       });
       proc.on('error', (spawnError: Error) => finish({ code: null, signal: null, spawnError }));
       proc.on('exit', (code, signal) => finish({ code, signal }));

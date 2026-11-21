@@ -1,6 +1,6 @@
 ---
 kind: feature
-covers: src/adapters, src/commands.ts, src/core/run.ts, src/core/intake.ts, src/core/ci-intake.ts, src/core/store.ts, src/cli/main.ts, src/cli/args.ts
+covers: src/adapters, src/core/worker-env.ts, src/commands.ts, src/core/run.ts, src/core/intake.ts, src/core/ci-intake.ts, src/core/store.ts, src/cli/main.ts, src/cli/args.ts
 ---
 # Dispatch, runs and recovery
 
@@ -20,7 +20,9 @@ assumed dead, and a CI failure event becomes one durable job however often it is
 ### adapters
 Run: `npm run --silent build && node --test dist/adapters/*.test.js`
 Proves: each runtime's adapter against fake binaries and recorded fixtures — settings accepted or
-refused, observed settings left unknown where the vendor confirms nothing, and Pi's stop proof.
+refused, observed settings left unknown where the vendor confirms nothing, and Pi's stop proof — and
+that a local worker (`claude-local`, `pi-local`) starts with a state directory of its own, outside the
+coordinator's, which is recorded in the run's evidence and removed when the run ends.
 
 ### command-layer
 Run: `npm run --silent build && node --test dist/commands.test.js dist/core/intake.test.js dist/core/ci-intake.test.js dist/core/store.test.js`
