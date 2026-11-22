@@ -276,6 +276,27 @@ describe('a redelivery only reaches work that is still waiting', () => {
     });
   }
 
+  it('refuses a redelivery when an attached run has no stored record, or is not a never-dispatched quota wait', () => {
+    box = sandbox(); writeFloor(FIXTURE_FLOOR);
+    grant();
+    const first = ingestCiFailure(event(), CONFIG);
+    const job = getJob(first.job!.id)!;
+    saveJob({ ...job, runIds: ['run_with_no_record'] });
+    assert.equal(ingestCiFailure(event(), CONFIG).outcome.kind, 'refused');
+    assert.deepEqual(getJob(job.id)?.runIds, ['run_with_no_record']);
+    const running: RunRecord = {
+      id: 'run_still_running', taskId: job.taskId, attempt: 1,
+      authority: { type: 'grant', id: 'grant_any', version: 1 }, limits: grant().perTask,
+      runtime: 'pi-local', profile: 'default', actions: ['author-changes'],
+      settings: { requested: { model: 'vendor-default', effort: 'vendor-default' },
+        resolved: { model: 'vendor-default', effort: 'vendor-default' }, observed: { model: 'unknown', effort: 'unknown' } },
+      startedAt: new Date().toISOString(), status: 'running', runtimeDispatched: false, promptNotSent: true,
+    };
+    saveRun(running);
+    saveJob({ ...job, runIds: [running.id] });
+    assert.equal(ingestCiFailure(event(), CONFIG).outcome.kind, 'refused');
+  });
+
   /**
    * submitJob guarantees one Job per key. It does not guarantee one repair or
    * one run, so a job with runs already attached is not something a redelivery
