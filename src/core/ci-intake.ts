@@ -7,6 +7,7 @@ import { screen, untrusted } from './review.js';
 import type { Screened } from './review.js';
 import { bindJobCandidate, submitJob } from './intake.js';
 import type { Job } from './intake.js';
+import { getRun } from './run.js';
 
 /**
  * A CI failure as reported by a configured source.
@@ -122,13 +123,19 @@ export function ingestCiFailure(event: CiFailureEvent, config: IntakeConfig): In
     // one run, so a job that already has runs is not something a redelivery may
     // start again: the existing attempt owns the work, and whether it is still
     // live is reconciliation's question, not this one.
-    if (job.runIds.length > 0) {
+    const attempts = job.runIds.filter((id) => {
+      const run = getRun(id);
+      // A recovered claim that provably never sent a prompt is not a repair.
+      // Keep its history on the job, but let redelivery reach current authority.
+      return !run || run.status !== 'quota-waiting' || run.promptNotSent !== true || run.runtimeDispatched !== false;
+    });
+    if (attempts.length > 0) {
       return {
         event, job, created, screened,
         outcome: {
           kind: 'refused',
           taskId: job.taskId,
-          summary: `Job ${job.id} already has ${job.runIds.length} run(s); this delivery does not start another.`,
+          summary: `Job ${job.id} already has ${attempts.length} run(s); this delivery does not start another.`,
           nextAction: `Reconcile or inspect the existing run(s) before starting a further attempt. A repeated event must not open a second repair PR.`,
           details: { runIds: job.runIds },
         },

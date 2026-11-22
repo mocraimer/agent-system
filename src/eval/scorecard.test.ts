@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { hostname } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { sandbox } from '../core/testkit.js';
 import type { Sandbox } from '../core/testkit.js';
-import { saveRun } from '../core/run.js';
+import { getRun, saveRun } from '../core/run.js';
 import type { RunRecord } from '../core/run.js';
 import {
   blockersFor, FeedbackError, getScorecard, groupReport, listScorecards, recordCheckResult,
-  recordFeedback, recordRepairCycle, recordReview, saveScorecard, ScorecardEvidenceError,
+  recordFeedback, recordLoop, recordRepairCycle, recordReview, saveScorecard, ScorecardEvidenceError,
 } from './scorecard.js';
 import type { CheckInput, ReviewInput, Scorecard } from './scorecard.js';
 
@@ -52,6 +56,45 @@ const review = (over: Partial<ReviewInput> = {}): ReviewInput => ({
 });
 
 describe('recorded evaluation evidence', () => {
+  it('cannot overwrite a dispatch claim with the loop writer\'s stale pre-dispatch snapshot', (t) => {
+    box = sandbox();
+    const evaluation = card({ finalStatus: 'running' });
+    saveScorecard(evaluation);
+    const claimed: RunRecord = {
+      id: 'run_1', taskId: 't1', attempt: 1, authority: evaluation.authority,
+      limits: { maxAttempts: 3, maxConcurrentRuns: 1, maxPaidCallUsd: 1 },
+      runtime: 'pi-local', profile: 'default', actions: ['review'], settings: evaluation.settings,
+      startedAt: new Date().toISOString(), status: 'running', runtimeDispatched: false,
+      dispatchOwner: { host: hostname(), pid: process.pid },
+    };
+    saveRun(claimed);
+    const originalRead = fs.readFileSync;
+    let publish = true;
+    t.mock.method(fs, 'readFileSync', ((...args: Parameters<typeof fs.readFileSync>) => {
+      const snapshot = originalRead(...args);
+      if (publish && String(args[0]) === join(box!.root, 'runs', 'run_1.json')) {
+        publish = false;
+        saveRun({ ...claimed, runtimeDispatched: true, admissionId: 'res_published' });
+      }
+      return snapshot;
+    }) as typeof fs.readFileSync);
+    syncBuiltinESMExports();
+    try {
+      const update = { stage: 'review' as const, item: 'PR #1', workType: 'bug' as const };
+      recordLoop(evaluation.id, update);
+      assert.equal(getRun(claimed.id)?.runtimeDispatched, true);
+      assert.equal(getRun(claimed.id)?.admissionId, 'res_published');
+      assert.equal(getRun(claimed.id)?.loop, undefined, 'only the claim owner may rewrite an owned run');
+      assert.deepEqual(getScorecard(evaluation.id)?.loop, update, 'card metadata still records the loop observation');
+      const settled: RunRecord = { ...getRun(claimed.id)!, status: 'completed' };
+      delete settled.dispatchOwner;
+      saveRun(settled);
+      recordLoop(evaluation.id, { ...update, wrote: 'comment 42' });
+      assert.equal(getRun(claimed.id)?.loop?.wrote, 'comment 42');
+      assert.equal(getRun(claimed.id)?.delivery?.status, 'delivered');
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  });
+
   it('keeps linked legacy attempts in their scorecard cohort without inventing a loaded build', () => {
     box = sandbox();
     const legacy = card({ id: 'card_old', taskId: 'old', runIds: ['run_old', 'run_null'], workflowVersion: 'coordinator@0.1.0' });

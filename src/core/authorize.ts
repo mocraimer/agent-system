@@ -3,7 +3,8 @@ import type {
 } from './authority.js';
 import { getApproval, listGrants } from './authority.js';
 import type { Outcome } from './outcome.js';
-import { dispatchesUnderAuthority, spentAttempts } from './run.js';
+import { activeRuns, dispatchesUnderAuthority, holdsRunCapacity, spentAttempts } from './run.js';
+import { archivedTarget } from './interactive-archive.js';
 import { readFloor } from './floor.js';
 
 /**
@@ -118,7 +119,7 @@ function pending(req: DispatchRequest, summary: string, details?: Record<string,
  * allowed is refused outright rather than reported as merely unapproved, which
  * would invite an operator to "fix" it by approving harder.
  */
-export function authorizeDispatch(req: DispatchRequest): AuthorityDecision {
+export function authorizeDispatch(req: DispatchRequest, options: { checkCapacity?: boolean } = {}): AuthorityDecision {
   const violations = checkFloor(req);
   if (violations.length > 0) {
     return refuse(
@@ -128,6 +129,10 @@ export function authorizeDispatch(req: DispatchRequest): AuthorityDecision {
       { violations: violations.map((v) => `${v.rule}: ${v.detail}`) },
     );
   }
+
+  if (archivedTarget({ taskId: req.taskId })) return refuse(req,
+    'Task family has a prepared or committed archive cutoff; no legacy or interactive effect may authorize it.',
+    'Keep retained history read-only. Reconcile unknown archive acknowledgement with the owner; a new grant cannot reopen it.');
 
   // 1. An individual approval, when the caller named one.
   if (req.approvalId) {
@@ -150,7 +155,7 @@ export function authorizeDispatch(req: DispatchRequest): AuthorityDecision {
         'Dispatch within the approved scope, or issue an approval that covers it.',
       );
     }
-    const attemptCheck = attemptsRemaining(req.taskId, approval.limits);
+    const attemptCheck = options.checkCapacity === false ? undefined : attemptsRemaining(req.taskId, approval.limits);
     if (attemptCheck) return attemptCheck;
     const tier = approvedTier(approval);
     return {
@@ -169,9 +174,9 @@ export function authorizeDispatch(req: DispatchRequest): AuthorityDecision {
       reasons.push(`${grant.id}: ${why}`);
       continue;
     }
-    const aggregate = aggregateCheck(grant, req);
+    const aggregate = options.checkCapacity === false ? undefined : aggregateCheck(grant, req);
     if (aggregate) return aggregate;
-    const attemptCheck = attemptsRemaining(req.taskId, grant.perTask);
+    const attemptCheck = options.checkCapacity === false ? undefined : attemptsRemaining(req.taskId, grant.perTask);
     if (attemptCheck) return attemptCheck;
     return {
       allowed: true,
@@ -263,12 +268,15 @@ function attemptsRemaining(taskId: string, limits: PerTaskLimits): AuthorityDeci
     };
     return { allowed: false, outcome };
   }
-  const inFlight = prior.filter((r) => r.status === 'running').length;
-  if (inFlight >= limits.maxConcurrentRuns) {
+  const active = prior.filter(holdsRunCapacity);
+  const inFlight = active.length;
+  // A second authority cannot widen an already active task's concurrency cap.
+  const concurrentLimit = Math.min(limits.maxConcurrentRuns, ...active.map((run) => run.limits.maxConcurrentRuns));
+  if (inFlight >= concurrentLimit) {
     const outcome: Outcome = {
-      kind: 'refused',
+      kind: prior.some((r) => r.status === 'remote-uncertain') ? 'remote-uncertain' : 'refused',
       taskId,
-      summary: `Task already has ${inFlight} run(s) in flight; its limit is ${limits.maxConcurrentRuns}.`,
+      summary: `Task already has ${inFlight} run(s) in flight; its limit is ${concurrentLimit}.`,
       nextAction:
         `Run \`agentsys status --task ${taskId}\` to find the run and its session id, then ` +
         '`agentsys recover` to reconcile it with the vendor. A run whose session id is blank lost ' +
@@ -291,7 +299,8 @@ function aggregateCheck(grant: Grant, req: DispatchRequest): AuthorityDecision |
     };
     return { allowed: false, outcome };
   }
-  const inFlight = spent.filter((r) => r.status === 'running').length;
+  // Concurrency does not expire when a dispatch rolls out of the budget window.
+  const inFlight = activeRuns().filter((r) => r.authority.id === grant.id).length;
   if (inFlight >= grant.aggregate.maxConcurrentRuns) {
     const outcome: Outcome = {
       kind: 'refused',

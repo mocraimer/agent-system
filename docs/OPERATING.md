@@ -28,6 +28,64 @@ what actually happened. Every dispatch passes two independent checks:
 Either can refuse on its own. A fresh installation has no approvals and no grants,
 so the first thing it does is decline to run anything.
 
+### Atomic dispatch and writer compatibility
+
+CLI, MCP, UI, loop and redispatch calls share one coordinator claim path. Usage
+reads happen without a disk lock. After the read, a short synchronous claim checks
+current authority and task/grant budgets, reserves subscription headroom (including
+estimate uncertainty), and publishes the run and job attachment. Narrowing and
+revocation use the same dispatch lock. No lock spans a real agent job. Intake's
+ready-to-dispatch result is a preview, not a claim or permission to skip dispatch.
+
+Uncertain work keeps concurrency and reservations until it is confirmed settled;
+its grant concurrency does not expire with the rolling dispatch window. Choosing
+another authority cannot widen a task's already active concurrency cap. Recovery
+will not reclaim a live dispatcher's claim from an early vendor “not found” answer.
+After a dispatcher dies, a claim recorded before the dispatch boundary can be
+released without spending an attempt. Once dispatch is recorded, an unknown effect
+stays uncertain even if the worker died before returning a session id. Recovered
+never-dispatched claims remain in job history but do not block a safe redelivery.
+A reused PID or an owner on another host cannot prove death; recovery fails closed.
+
+Store locks use `fs-native-extensions` 1.5.1 descriptor-owned kernel locks. Files in
+`locks/*.lock` are stable namespace files, **not stale work**: never delete, replace,
+or restore them while any writer is running. Closing the owning descriptor or
+process death releases the kernel lock; file age does not. Acquisition retries for
+at most 120 seconds. Async acquisition yields to the event loop; a synchronous
+caller refuses a same-process busy lock rather than blocking its async holder.
+Unexpected setup failures before runtime dispatch release their claims when state
+is writable. If cleanup cannot be persisted, stop the affected dispatcher and use
+recovery before retrying; do not infer that a reservation was released.
+
+**This lock protocol is incompatible with older existence/staleness writers.**
+Before an owner-approved activation, inventory every CLI/MCP/UI/loop writer and
+active, reserved and uncertain work; quiesce all old writers and verify they cannot
+restart, back up the quiesced store, then update every writer together. Do not run
+old and new versions against the same state, or roll back only one writer. An
+isolated restored store needs its own lock namespace. Linux/WSL descriptor and
+process-death behavior has been verified on a Windows drive mounted in WSL. Native Windows and mixed Windows/WSL writers still need their own
+compatibility evidence before such a cutover. Building or testing this feature
+does not authorize live activation, grant changes or service restarts.
+
+### Owner-only interactive archive
+
+The trusted product library archives a whole retained project, space or task family
+through `interactiveArchive`; this is not a remote request or a cancellation API.
+Supply every exact product receiver, including already archived children. The
+coordinator expands all retained linked runs, tasks and conversations. There is no
+lifetime count cap; each identifier still has a bounded size and excludes paths.
+Remote dispatch and evidence request bounds remain unchanged.
+
+Archive refuses active, uncertain, queued or otherwise unresolved work and held
+limits. It keeps history and evidence intact. One shared dispatch fence and the
+complete ordered set of run locks stay owned until the synchronous SQL callback
+finishes. Lock acquisition or OS resource failures refuse the entire operation,
+never truncate the inventory or commit part of a family. The prepared cutoff is
+durable before SQL and denies late writers even if the process dies. After a lost
+acknowledgement, use `interactiveArchiveReconcile` with a trusted SQL read and the
+same archive key; an uncommitted archive needs an explicit synchronous retry.
+Reconciliation and replay verify the full frozen inventory before succeeding.
+
 ## What it does not do
 
 It never merges into `main`, enables auto-merge, force-pushes, pushes to a base

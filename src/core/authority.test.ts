@@ -56,6 +56,18 @@ function runRecord(over: Partial<RunRecord> = {}): RunRecord {
   };
 }
 
+describe('task claims across authority changes', () => {
+  it('cannot widen an active task concurrency cap by choosing a broader approval', () => {
+    box = sandbox();
+    const approval = createApproval(OPERATOR, { repo: REPO, taskScope: 'broader concurrency', workClass: 'ci-repair',
+      runtime: 'pi-local', profile: 'default', actions: ['author-changes'], limits: { ...LIMITS, maxConcurrentRuns: 3 } });
+    saveRun(runRecord({ status: 'running', limits: { ...LIMITS, maxConcurrentRuns: 1 } }));
+    const decision = authorizeDispatch(request({ approvalId: approval.id, actions: ['author-changes'] }));
+    assert.equal(decision.allowed, false);
+    assert.match(decision.allowed ? '' : decision.outcome.summary, /limit is 1/);
+  });
+});
+
 describe('minting authority', () => {
   it('refuses an agent actor', () => {
     box = sandbox();
@@ -315,6 +327,19 @@ describe('standing grants', () => {
     assert.equal(d.allowed, false);
     assert.match(d.allowed === false ? d.outcome.summary : '', /dispatches in its 24h window/);
   });
+
+  for (const status of ['running', 'remote-uncertain', 'setup-blocked'] as const) {
+    it(`keeps ${status} grant concurrency claimed after its dispatch window expires`, () => {
+      box = sandbox();
+      const grant = createGrant(OPERATOR, { ...grantInput, runtimes: ['pi-local'] });
+      saveRun(runRecord({ taskId: 'old-task', status, runtimeDispatched: true,
+        authority: { type: 'grant', id: grant.id, version: 1 },
+        startedAt: new Date(Date.now() - 25 * 3_600_000).toISOString() }));
+      const decision = authorizeDispatch(request({ taskId: 'new-task', triggerSource: 'github-actions:mocraimer/agent-system' }));
+      assert.equal(decision.allowed, false);
+      assert.match(decision.allowed ? '' : decision.outcome.summary, /concurrent run/);
+    });
+  }
 
   it('counts many small tasks against one aggregate budget', () => {
     box = sandbox();

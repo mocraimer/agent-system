@@ -5,6 +5,7 @@ import {
   remainingUsd, reserveCall, setLedgerPolicy, settleCall,
 } from './ledger.js';
 import { sandbox } from './testkit.js';
+import { withLock } from './store.js';
 import type { Sandbox } from './testkit.js';
 
 let box: Sandbox | undefined;
@@ -20,6 +21,11 @@ const call = (boundUsd: number, over: Partial<Parameters<typeof reserveCall>[0]>
   });
 
 describe('the bootstrap allowance', () => {
+  it('normal paid reservation reuses a synchronous dispatcher fence without changing allowance accounting', () => {
+    box = sandbox();
+    assert.equal(withLock('dispatch', () => call(0.25)).allowed, true);
+    assert.equal(committedUsd(), 0.25); assert.equal(remainingUsd(), 9.75);
+  });
   it('starts at USD 10', () => {
     box = sandbox();
     assert.equal(getLedgerPolicy().allowanceUsd, 10);

@@ -26,17 +26,16 @@ const VENDOR_CONTROLLED: RuntimeCapabilities = {
   skillInvocationForm: 'task prompt',
 };
 
-describe('operations under the admission lock stay inside its staleness window', () => {
-  it('bounds a locked operation below the point a waiter may break the lock', () => {
-    // Nothing refreshes the lock file while a critical section runs, so an
-    // operation slower than LOCK_STALE_MS lets a waiting dispatcher break the lock
-    // and enter admission alongside the holder — both seeing the same headroom.
+describe('the legacy bounded-operation timeout stays compatible', () => {
+  it('preserves a positive timeout below the legacy minute budget', () => {
+    // These exported helpers still bound adapter reads. Kernel locks no longer
+    // expire, and admission performs those reads before taking a disk lock.
     assert.ok(maxLockedOperationMs() < LOCK_STALE_MS,
-      'a locked operation must finish before the lock can be broken');
+      'the bounded-operation timeout stays below the legacy budget');
     assert.ok(maxLockedOperationMs() > 0);
   });
 
-  it('leaves room for the rest of the critical section', () => {
+  it('preserves the legacy timeout margin', () => {
     assert.ok(LOCK_STALE_MS - maxLockedOperationMs() >= 10_000,
       'the slow part must not consume the whole window');
   });

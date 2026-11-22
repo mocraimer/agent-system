@@ -18,6 +18,9 @@ export type RuntimeId = 'pi-local' | 'codex-cloud' | 'claude-web' | 'claude-loca
 
 /** What a run is permitted to do. Absent from any list means not permitted. */
 export type ActionId =
+  | 'conversation'
+  | 'task-tools'
+  | 'delegate-task'
   | 'author-changes'
   | 'open-pr'
   | 'push-branch'
@@ -317,7 +320,7 @@ export interface NarrowInput {
  */
 export function narrowGrant(actor: Actor, id: string, input: NarrowInput): Grant {
   assertOperator(actor);
-  return withLock(`grant-${id}`, () => {
+  return withLock('dispatch', () => {
     const grant = getGrant(id);
     if (!grant) throw new AuthorityError(`No grant "${id}".`);
     if (grant.status !== 'active') {
@@ -376,7 +379,7 @@ export function narrowGrant(actor: Actor, id: string, input: NarrowInput): Grant
 
 export function revokeGrant(actor: Actor, id: string, reason: string): Grant {
   assertOperator(actor);
-  return withLock(`grant-${id}`, () => {
+  return withLock('dispatch', () => {
     const grant = getGrant(id);
     if (!grant) throw new AuthorityError(`No grant "${id}".`);
     const version = grant.version + 1;
@@ -396,9 +399,11 @@ export function revokeGrant(actor: Actor, id: string, reason: string): Grant {
 
 export function revokeApproval(actor: Actor, id: string): Approval {
   assertOperator(actor);
-  const approval = getApproval(id);
-  if (!approval) throw new AuthorityError(`No approval "${id}".`);
-  const next: Approval = { ...approval, version: approval.version + 1, revokedAt: new Date().toISOString() };
-  writeJson(join(approvalsDir(), `${id}.json`), next);
-  return next;
+  return withLock('dispatch', () => {
+    const approval = getApproval(id);
+    if (!approval) throw new AuthorityError(`No approval "${id}".`);
+    const next: Approval = { ...approval, version: approval.version + 1, revokedAt: new Date().toISOString() };
+    writeJson(join(approvalsDir(), `${id}.json`), next);
+    return next;
+  });
 }

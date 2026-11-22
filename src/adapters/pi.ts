@@ -190,6 +190,7 @@ export class PiAdapter implements RuntimeAdapter {
   }
 
   private async dispatchIn(input: DispatchInput, worker: WorkerEnvironment): Promise<DispatchResult> {
+    if (input.entry === 'interactive') throw new Error('Legacy adapter cannot execute guarded interactive work.');
     // The approved tier outranks this adapter's own default and is outranked in
     // turn by what the caller named, which `resolveSettings` prefers.
     const resolved = resolveSettings(this.capabilities, input.settings, {

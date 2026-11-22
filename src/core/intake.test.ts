@@ -11,6 +11,7 @@ import type { Outcome } from './outcome.js';
 import { getRun, saveRun } from './run.js';
 import type { RunRecord } from './run.js';
 import { sandbox } from './testkit.js';
+import { withLock } from './store.js';
 import type { Sandbox } from './testkit.js';
 
 let box: Sandbox | undefined;
@@ -52,6 +53,14 @@ function run(over: Partial<RunRecord> = {}): RunRecord {
 }
 
 describe('duplicate delivery', () => {
+  it('normal intake reuses an existing synchronous dispatcher fence without changing duplicate semantics', () => {
+    box = sandbox();
+    withLock('dispatch', () => {
+      const first = submitJob(submission()), duplicate = submitJob(submission());
+      assert.equal(first.created, true); assert.equal(duplicate.created, false); assert.equal(first.job.id, duplicate.job.id);
+    });
+    assert.equal(listJobs().length, 1);
+  });
   it('does not create a second job for the same event', () => {
     box = sandbox();
     const first = submitJob(submission());
