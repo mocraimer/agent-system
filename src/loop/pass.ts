@@ -83,8 +83,8 @@ const lockPath = (slug: string): string => join(stateRoot(), 'locks', `loop-${sl
 /**
  * One loop per target repository, held for the life of the loop process.
  *
- * Not the store's short-section lock, which breaks after a minute unrefreshed: a
- * pass can run for an hour. This lock names its holder's pid, and a holder that
+ * Separate from the store's short-section admission locks: a pass can run for
+ * an hour. This lock names its holder's pid, and a holder that
  * is no longer running has no claim to it — which is how a loop killed mid-pass
  * leaves nothing that blocks the next one.
  */

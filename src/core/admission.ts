@@ -1,7 +1,8 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Outcome } from './outcome.js';
-import { listRecords, newId, readJson, readRecord, stateRoot, withLock, withLockAsync, writeJson } from './store.js';
+import { listRecords, newId, readJson, readRecord, stateRoot, withDispatchFence, withLock, writeJson } from './store.js';
+import { archivedTarget } from './interactive-archive.js';
 import type { UsageReading, UsageResult, UsageWindow, WindowKind } from './usage.js';
 import { ageSeconds, resetInstant, windowOf } from './usage.js';
 
@@ -167,7 +168,9 @@ export function getPolicy(subscriptionId: string): SubscriptionPolicy {
 
 /** Only an operator path should reach this; authority.assertOperator gates the CLI. */
 export function savePolicy(policy: SubscriptionPolicy): void {
-  writeJson(join(policiesDir(), `${policy.subscriptionId}.json`), policy);
+  withLock(`admission-${policy.subscriptionId}`, () => {
+    writeJson(join(policiesDir(), `${policy.subscriptionId}.json`), policy);
+  });
 }
 
 export function listReservations(subscriptionId?: string): Reservation[] {
@@ -255,7 +258,7 @@ export interface AdmissionRequest {
   taskId: string;
   runId: string;
   estimate: UsageEstimate;
-  /** Supplies a fresh reading. Called inside the lock so two dispatchers cannot race. */
+  /** Supplies a fresh reading before the synchronous reservation claim. */
   readUsage: () => Promise<UsageResult> | UsageResult;
   /**
    * Decide without reserving. A dry run asks whether work *would* be admitted;
@@ -267,17 +270,23 @@ export interface AdmissionRequest {
   now?: Date;
 }
 
-/**
- * Decide whether a job may launch, and reserve its headroom if so.
- *
- * The whole body runs under one lock and takes its reading *inside* that lock:
- * reading first and locking second would let two dispatchers observe the same
- * headroom and each conclude it was free.
- */
+/** Read usage without holding a disk lock, then claim current headroom atomically. */
 export async function admit(req: AdmissionRequest): Promise<AdmissionDecision> {
-  const policy = getPolicy(req.subscriptionId);
+  const result = req.estimate.basis === 'none' ? undefined : await req.readUsage();
+  return admitWithReading(req, result);
+}
 
-  return await withLockAsync(`admission-${req.subscriptionId}`, async () => {
+/**
+ * Synchronous admission, also used inside the coordinator's dispatch claim.
+ * Reservations and policy are read under the account lock after the external
+ * read returns. No promise or vendor operation may run in this critical section.
+ */
+export function admitWithReading(
+  req: Omit<AdmissionRequest, 'readUsage'>, result: UsageResult | undefined,
+): AdmissionDecision {
+  return withDispatchFence(() => withLock(`admission-${req.subscriptionId}`, () => {
+    const policy = getPolicy(req.subscriptionId);
+    if (archivedTarget({ taskId: req.taskId, runId: req.runId })) return blocked(req, policy, { kind: 'refused', taskId: req.taskId, runId: req.runId, summary: 'Archived/prepared task family cannot reserve a new execution.', nextAction: 'Keep archived history read-only; reconcile unknown archive state with the owner.' });
     // The estimate is part of the request, and no usage reading can make a
     // basis-less one usable. Settling it before calling the vendor keeps a
     // request the caller can fix from depending on an external call that cannot
@@ -297,8 +306,7 @@ export async function admit(req: AdmissionRequest): Promise<AdmissionDecision> {
       });
     }
 
-    const result = await req.readUsage();
-
+    if (!result) throw new Error('Admission requires a usage result for a based estimate.');
     if (!result.ok) {
       return blocked(req, policy, {
         kind: 'quota-waiting',
@@ -311,6 +319,13 @@ export async function admit(req: AdmissionRequest): Promise<AdmissionDecision> {
     }
 
     const reading = result.reading;
+    if (reading.subscriptionId !== req.subscriptionId) {
+      return blocked(req, policy, {
+        kind: 'quota-waiting', taskId: req.taskId, runId: req.runId,
+        summary: `Usage reading belongs to ${reading.subscriptionId}, not ${req.subscriptionId}.`,
+        nextAction: 'Read usage for the requested subscription before retrying.',
+      });
+    }
     const age = ageSeconds(reading);
     if (age > policy.maxReadingAgeSeconds) {
       return blocked(req, policy, {
@@ -418,7 +433,7 @@ export async function admit(req: AdmissionRequest): Promise<AdmissionDecision> {
       reservationId: reservation.id,
       reading,
     };
-  });
+  }));
 }
 
 function estimateFor(e: UsageEstimate, kind: WindowKind): number {
@@ -427,11 +442,11 @@ function estimateFor(e: UsageEstimate, kind: WindowKind): number {
 
 /** What reservations already hold against one window. */
 export function reservedPercent(held: readonly Reservation[], kind: WindowKind): number {
-  return held.reduce((sum, r) => sum + estimateFor(r.estimate, kind), 0);
+  return held.reduce((sum, r) => sum + estimateFor(r.estimate, kind) + r.estimate.uncertaintyPercent, 0);
 }
 
 function blocked(
-  req: AdmissionRequest,
+  req: Omit<AdmissionRequest, 'readUsage'>,
   _policy: SubscriptionPolicy,
   outcome: Outcome,
 ): AdmissionDecision {
@@ -491,7 +506,7 @@ export function releaseReservation(id: string, note?: string): Reservation | und
  * @param runs the run records to check, as `{id, status, reservationId}`
  */
 export function sweepStrandedReservations(
-  runs: { id: string; status: string; reservationId: string | undefined }[],
+  runs: { id: string; status: string; reservationId: string | undefined; promptNotSent?: true; runtimeDispatched?: boolean }[],
 ): { reservationId: string; runId: string; action: 'released' | 'outstanding' }[] {
   const byReservation = new Map(
     runs.filter((r) => r.reservationId !== undefined).map((r) => [r.reservationId as string, r]),
@@ -501,7 +516,8 @@ export function sweepStrandedReservations(
   for (const reservation of listReservations()) {
     if (reservation.state === 'released') continue;
 
-    const run = byReservation.get(reservation.id);
+    const run = byReservation.get(reservation.id)
+      ?? runs.find((r) => r.id === reservation.runId && r.status === 'quota-waiting' && r.promptNotSent === true && r.runtimeDispatched === false);
     // A reservation with no run behind it is not this function's to judge: it
     // may belong to a dispatch still deciding. Only a run that reported a status
     // settles anything.
@@ -514,7 +530,7 @@ export function sweepStrandedReservations(
 
     // Still in flight, or still genuinely uncertain: its headroom is its own.
     if (run.status === 'running') continue;
-    if (!SETTLED_STATUSES.includes(run.status)) {
+    if (!SETTLED_STATUSES.includes(run.status) && !(run.status === 'quota-waiting' && run.promptNotSent === true && run.runtimeDispatched === false)) {
       // Only a held reservation needs moving here. One already outstanding is
       // in the right state for a run whose outcome is still not established.
       if (reservation.state === 'held') {

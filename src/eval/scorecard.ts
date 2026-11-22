@@ -407,7 +407,10 @@ export function recordLoop(id: string, record: Partial<LoopRecord> & Pick<LoopRe
     const loop: LoopRecord = { ...card.loop, ...record };
     const latest = card.runIds.at(-1);
     const run = latest ? getRun(latest) : undefined;
-    if (run) {
+    // A dispatcher/recovery owns lifecycle fields until it finalizes its claim.
+    // A card-only writer must not replay a pre-dispatch snapshot over the later
+    // runtimeDispatched flag (or restore an owner that already settled).
+    if (run && !run.dispatchOwner) {
       const at = new Date().toISOString();
       // Only this attempt can own its observed artifact. A quota preview cannot
       // credit an earlier worker's PR, and interruption never adopts a draft.

@@ -64,7 +64,9 @@ export interface DispatchInput {
    * manifest-dev entry; `review-pr` enters that skill directly; `prompt` sends it
    * as written for side-effect-free evaluator prompts.
    */
-  entry?: 'skill' | 'review-pr' | 'prompt';
+  entry?: 'skill' | 'review-pr' | 'prompt' | 'interactive';
+  /** Host-bound interactive identity; never a prompt/evaluator entry. */
+  interactive?: { requestId: string; conversationId: string; parentRunId?: string };
   /** The actions the run is authorized for, so an adapter can scope its tools to them. */
   actions?: ActionId[];
 }
@@ -80,6 +82,8 @@ export interface DispatchResult {
 
 export interface RuntimeAdapter {
   readonly capabilities: RuntimeCapabilities;
+  /** Only adapters with an enforced custom-tool boundary may opt in. */
+  readonly guardedInteractive?: true;
   /** Read this runtime's subscription usage through a supported interface. */
   readUsage(): Promise<UsageResult>;
   /**

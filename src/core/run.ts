@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { hostname } from 'node:os';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import type { BuildIdentity } from './build.js';
@@ -81,11 +82,15 @@ export interface RunRecord {
   repo?: string;
   workClass?: string;
   runtimeDispatched?: boolean;
+  /** Fences recovery while a dispatcher can still publish or start this attempt. */
+  dispatchOwner?: { host: string; pid: number };
   /** Proven before the task prompt was sent. Absent means unknown, not false. */
   promptNotSent?: true;
   loop?: LoopRecord;
   outputPath?: string;
   promptDigest?: string;
+  /** Absent on legacy jobs: those jobs are not guarded interactive executions. */
+  interactive?: { requestId: string; conversationId: string; parentRunId?: string; rootTaskId: string; runtimeSession?: { id: string; file?: string } };
   /** Manual Pi-only stop attestation; never evidence that the task completed. */
   stopAttestation?: {
     kind: 'pi-process-stopped';
@@ -133,9 +138,28 @@ export function newRunId(): string {
   return newId('run');
 }
 
+/** A published claim cannot be reclaimed while its dispatcher may still use it. */
+export function dispatchOwnerPresent(run: RunRecord): boolean {
+  const owner = run.dispatchOwner;
+  if (!owner) return false;
+  // A shared store on another host cannot prove that process stopped.
+  if (owner.host !== hostname()) return true;
+  try { process.kill(owner.pid, 0); return true; } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+/** Includes uncertain effects, not just a worker still being watched. */
+export function holdsRunCapacity(run: RunRecord): boolean {
+  return run.status === 'running' || run.status === 'remote-uncertain'
+    || (run.runtimeDispatched === true && ![
+      'completed', 'checks-failed', 'refused', 'unsupported-settings', 'attempts-exhausted',
+    ].includes(run.status));
+}
+
 /** Runs still in flight. Used for concurrency limits and for restart reconciliation. */
 export function activeRuns(): RunRecord[] {
-  return listRuns().filter((r) => r.status === 'running' || r.status === 'remote-uncertain');
+  return listRuns().filter(holdsRunCapacity);
 }
 
 export function runsForTask(taskId: string): RunRecord[] {
@@ -145,26 +169,27 @@ export function runsForTask(taskId: string): RunRecord[] {
 /**
  * Attempts a task has actually spent.
  *
- * An admission refusal never reaches a runtime, so it is durable history but not
- * an attempt: it neither consumes the retry budget nor advances the number a run
+ * A never-dispatched admission refusal is history but not an attempt. If an
+ * adapter itself returned quota-waiting after dispatch, it did spend an attempt.
+ * A pre-dispatch refusal neither consumes the retry budget nor advances the number a run
  * is labelled with. Both callers ask this one question, so the budget an operator
  * has left and the attempt they are shown cannot drift apart.
  */
 export function spentAttempts(taskId: string): RunRecord[] {
-  return runsForTask(taskId).filter((r) => r.status !== 'quota-waiting');
+  return runsForTask(taskId).filter((r) => !(r.interactive && r.promptNotSent === true && r.runtimeDispatched === false) && (r.status !== 'quota-waiting' || r.runtimeDispatched === true));
 }
 
 /**
  * Dispatches an authority has already spent inside its rolling window.
  *
- * An admission refusal is left out for the reason `spentAttempts` leaves it out:
- * it never reached a runtime. Counting it let a grant spend its whole window on
+ * Never-dispatched admission refusals are left out for the same reason as in
+ * `spentAttempts`. Counting them let a grant spend its whole window on
  * work that was only ever waiting for allowance, and then refuse the work once
  * the allowance came back.
  */
 export function dispatchesUnderAuthority(authorityId: string, windowHours: number): RunRecord[] {
   const cutoff = Date.now() - windowHours * 3_600_000;
   return listRuns().filter(
-    (r) => r.authority.id === authorityId && Date.parse(r.startedAt) >= cutoff && r.status !== 'quota-waiting',
+    (r) => r.authority.id === authorityId && Date.parse(r.startedAt) >= cutoff && !(r.interactive && r.promptNotSent === true && r.runtimeDispatched === false) && (r.status !== 'quota-waiting' || r.runtimeDispatched === true),
   );
 }

@@ -54,14 +54,12 @@ export class ClaudeWebAdapter implements RuntimeAdapter {
   async readUsage(): Promise<UsageResult> {
     const attemptedAt = new Date().toISOString();
     try {
-      // Both reads are local and cost nothing, and they run concurrently so naming
-      // the account does not lengthen the time the admission lock is held.
+      // Both reads are local and cost nothing. Read them concurrently before
+      // admission takes its synchronous reservation lock.
       const [usage, account] = await Promise.all([
         run(this.bin, ['-p', '/usage', '--output-format', 'json'], {
           maxBuffer: 8 * 1024 * 1024,
-          // This runs inside the admission lock. A read slower than the lock's
-          // staleness window would let a waiting dispatcher break the lock and enter
-          // admission alongside us — both then seeing the same free headroom.
+          // Preserve the bounded usage-read timeout; no disk lock spans this call.
           timeout: maxLockedOperationMs(),
         }),
         this.accountIdentity(),
@@ -154,6 +152,7 @@ export class ClaudeWebAdapter implements RuntimeAdapter {
   }
 
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
+    if (input.entry === 'interactive') throw new Error('Legacy adapter cannot execute guarded interactive work.');
     // The approved tier outranks this adapter's own default. It is sent, and it
     // is never confirmed: this runtime reports nothing back, so the snapshot
     // records `unknown` for what actually ran rather than echoing this.

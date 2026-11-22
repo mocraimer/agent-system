@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
-  closeSync, mkdirSync, openSync, readFileSync, readdirSync,
-  renameSync, rmSync, statSync, writeFileSync,
+  closeSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync,
+  renameSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { checkShape } from './validate.js';
+import { tryLock, unlock } from 'fs-native-extensions';
+import { setTimeout as delay } from 'node:timers/promises';
 
 type ShapeKind = Parameters<typeof checkShape>[0];
 
@@ -132,112 +134,99 @@ export function listJson<T>(dir: string): T[] {
   return out;
 }
 
-/**
- * How long a held lock may go unrefreshed before another process may break it.
- *
- * Exported because it bounds every operation performed *under* the lock. Nothing
- * refreshes the file while a critical section runs, so an operation slower than
- * this lets a waiter break the lock and enter alongside the holder. Callers derive
- * their timeouts from `maxLockedOperationMs()` rather than picking a number.
- */
+/** Legacy timeout constant retained for callers; live locks are never time-stolen. */
 export const LOCK_STALE_MS = 60_000;
 
-/**
- * The longest an operation under the lock may take.
- *
- * Three quarters of the staleness window, leaving room for the rest of the
- * critical section after the slow part returns.
- */
+/** Bound slow operations under a lock without relying on lock expiration. */
 export function maxLockedOperationMs(): number {
   return Math.floor(LOCK_STALE_MS * 0.75);
 }
 
-
 interface LockHandle {
-  path: string;
-  /** Unique per acquisition, so a holder can prove the lock is still its own. */
-  token: string;
+  fd: number;
+  key: string;
 }
 
-/**
- * Acquire a lock, then verify we actually hold it.
- *
- * `O_EXCL` alone is atomic, but breaking a *stale* lock is not: two processes can
- * both see the same stale file, both unlink it, and both then create one — the
- * second unlink destroying the first's freshly created lock, leaving two holders.
- * So each acquisition writes a unique token and reads it back. Exactly one token
- * survives, and the loser retries rather than running concurrently.
- */
-function acquireLock(name: string): LockHandle {
+// A synchronous waiter cannot let an async holder on this event loop resume.
+// Track the inode, not the path, so aliases cannot evade the busy check.
+const localLocks = new Set<string>();
+const localAsyncLocks = new Set<string>();
+const localSyncHandles = new Map<string, { fd: number; pid: number }>();
+
+function openLock(name: string): LockHandle {
   const path = join(stateRoot(), 'locks', `${name}.lock`);
   mkdirSync(dirname(path), { recursive: true });
-  const deadline = Date.now() + LOCK_STALE_MS * 2;
-
-  for (;;) {
-    const token = `${process.pid}:${randomUUID()}`;
-    let created = false;
-    try {
-      closeSync(openSync(path, 'wx'));
-      created = true;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    }
-
-    if (created) {
-      writeFileSync(path, token, 'utf8');
-      if (readLockToken(path) === token) return { path, token };
-      // A racing stale-breaker replaced our file; the lock is not ours.
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-      continue;
-    }
-
-    let age = Infinity;
-    try {
-      age = Date.now() - statSync(path).mtimeMs;
-    } catch {
-      continue; // released between our open and our stat; retry immediately
-    }
-    if (age > LOCK_STALE_MS) {
-      rmSync(path, { force: true });
-      continue;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(
-        `Could not acquire lock "${name}": held for ${Math.round(age / 1000)}s by another process.`,
-      );
-    }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
-  }
-}
-
-function readLockToken(path: string): string | undefined {
+  const fd = openSync(path, 'a+');
   try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return undefined;
+    const stat = fstatSync(fd);
+    return { fd, key: `${stat.dev}:${stat.ino}` };
+  } catch (err) {
+    closeSync(fd);
+    throw err;
   }
 }
 
-/**
- * Release a lock we still own.
- *
- * After a lost stale-break race the file belongs to someone else, and removing it
- * would let a third process in on top of them.
- */
+function lockTimeout(name: string): Error {
+  return new Error(`Could not acquire lock "${name}" within ${LOCK_STALE_MS * 2 / 1000}s; another holder still owns it.`);
+}
+
+function acquireLock(name: string): LockHandle {
+  const handle = openLock(name);
+  const deadline = Date.now() + LOCK_STALE_MS * 2;
+  try {
+    if (localLocks.has(handle.key)) {
+      throw new Error(`Lock "${name}" is busy in this process; a synchronous wait would block its holder.`);
+    }
+    while (!tryLock(handle.fd)) {
+      if (localAsyncLocks.size > 0) {
+        throw new Error(`Lock "${name}" is busy while this process holds an async lock; synchronous waiting could prevent its release.`);
+      }
+      if (Date.now() >= deadline) throw lockTimeout(name);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+    localLocks.add(handle.key);
+    localSyncHandles.set(handle.key, { fd: handle.fd, pid: process.pid });
+    return handle;
+  } catch (err) {
+    closeSync(handle.fd);
+    throw err;
+  }
+}
+
+async function acquireLockAsync(name: string): Promise<LockHandle> {
+  const handle = openLock(name);
+  const deadline = Date.now() + LOCK_STALE_MS * 2;
+  try {
+    while (!tryLock(handle.fd)) {
+      if (Date.now() >= deadline) throw lockTimeout(name);
+      await delay(25);
+    }
+    localLocks.add(handle.key);
+    localAsyncLocks.add(handle.key);
+    return handle;
+  } catch (err) {
+    closeSync(handle.fd);
+    throw err;
+  }
+}
+
 function releaseLock(handle: LockHandle): void {
-  if (readLockToken(handle.path) === handle.token) {
-    rmSync(handle.path, { force: true });
+  try {
+    unlock(handle.fd);
+  } finally {
+    localLocks.delete(handle.key);
+    localAsyncLocks.delete(handle.key);
+    localSyncHandles.delete(handle.key);
+    closeSync(handle.fd);
   }
 }
 
 /**
- * Cross-process exclusive lock.
- *
- * Reservations against a shared subscription are read-modify-write across
- * independent CLI invocations, so a mutex inside one process would not stop two
- * dispatchers spending the same headroom. `O_EXCL` on a shared filesystem is the
- * primitive available without adding a dependency; a stale holder is broken only
- * after it stops being refreshed, so a crashed dispatcher cannot deadlock the rest.
+ * Kernel-owned cross-process lock on a stable inode. Never unlink these files:
+ * doing so lets a new opener lock a different inode while the old holder runs.
+ * Closing the owning descriptor (including process death) releases the lock.
+ * All writers must use this protocol; old existence/staleness writers must be
+ * quiesced before activation. Synchronous bodies must not return promises.
  */
 export function withLock<T>(name: string, fn: () => T): T {
   const handle = acquireLock(name);
@@ -248,15 +237,31 @@ export function withLock<T>(name: string, fn: () => T): T {
   }
 }
 
-/**
- * The same lock, held across an awaited body.
- *
- * Separate from `withLock` because a sync wrapper cannot hold a lock across an
- * `await`: it would release as soon as the body returned its promise, leaving the
- * critical section unprotected exactly where concurrency matters most.
- */
+/** Reuse only this process's still-owned synchronous dispatch descriptor, never an async holder. */
+export function withDispatchFence<T>(fn: () => T): T {
+  const execute = (): T => {
+    if (fn.constructor.name === 'AsyncFunction') throw new Error('Dispatch fence callback must be synchronous.');
+    const result = fn();
+    if (result && (typeof result === 'object' || typeof result === 'function') && 'then' in result && typeof result.then === 'function') throw new Error('Dispatch fence callback returned an unsupported promise.');
+    return result;
+  };
+  const probe = openLock('dispatch');
+  let owns = false;
+  try {
+    const owner = localSyncHandles.get(probe.key);
+    if (localAsyncLocks.has(probe.key)) throw new Error('Dispatch fence has an async holder; synchronous reuse would escape its critical section.');
+    if (owner?.pid === process.pid) {
+      const stat = fstatSync(owner.fd);
+      owns = `${stat.dev}:${stat.ino}` === probe.key && tryLock(owner.fd);
+      if (!owns) throw new Error('Synchronous dispatch descriptor ownership could not be proved.');
+    }
+  } finally { closeSync(probe.fd); }
+  return owns ? execute() : withLock('dispatch', execute);
+}
+
+/** Same ownership across awaits, with event-loop-friendly bounded acquisition. */
 export async function withLockAsync<T>(name: string, fn: () => Promise<T>): Promise<T> {
-  const handle = acquireLock(name);
+  const handle = await acquireLockAsync(name);
   try {
     return await fn();
   } finally {

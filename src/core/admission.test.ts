@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, it } from 'node:test';
 import {
-  DEFAULT_POLICY, activeReservations, admit, getPolicy, listReservations,
+  DEFAULT_POLICY, activeReservations, admit, admitWithReading, getPolicy, listReservations,
   markOutstanding, releaseReservation, savePolicy, sweepStrandedReservations,
 } from './admission.js';
 import type { AdmissionRequest, UsageEstimate } from './admission.js';
@@ -11,6 +11,7 @@ import { sandbox } from './testkit.js';
 import type { Sandbox } from './testkit.js';
 import type { UsageReading, UsageResult } from './usage.js';
 import { classifyWindow } from './usage.js';
+import { withLock } from './store.js';
 
 let box: Sandbox | undefined;
 afterEach(() => {
@@ -68,6 +69,11 @@ describe('window classification', () => {
 });
 
 describe('thresholds', () => {
+  it('normal direct reservation reuses the dispatcher synchronous fence without nested blocking', () => {
+    box = sandbox();
+    const decision = withLock('dispatch', () => admitWithReading(req(), { ok: true, reading: reading(10, 10) }));
+    assert.equal(decision.admitted, true); assert.equal(listReservations().length, 1);
+  });
   it('defaults to the operator-chosen 60 / 40', () => {
     box = sandbox();
     const p = getPolicy(SUB);
@@ -205,6 +211,40 @@ describe('unusable readings never become headroom', () => {
 });
 
 describe('reservations', () => {
+  it('reads usage concurrently, but claims reservations against current shared headroom', async () => {
+    box = sandbox();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let reads = 0;
+    const readUsage = async (): Promise<UsageResult> => {
+      if (++reads === 2) release();
+      await gate;
+      return { ok: true, reading: reading(30, 5) };
+    };
+    const decisions = await Promise.all(['run_a', 'run_b'].map((runId) => admit(req({ runId, readUsage,
+      estimate: { ...ESTIMATE, fiveHourPercent: 20, uncertaintyPercent: 0 } }))));
+    assert.equal(decisions.filter((decision) => decision.admitted).length, 1);
+    assert.equal(activeReservations(SUB).length, 1);
+  });
+
+  it('keeps uncertainty reserved for every admitted job, not just the next estimate', async () => {
+    box = sandbox();
+    const estimate = { ...ESTIMATE, fiveHourPercent: 10, uncertaintyPercent: 10 };
+    const first = await admit(req({ runId: 'run_a', estimate, readUsage: () => ({ ok: true, reading: reading(20, 0) }) }));
+    assert.equal(first.admitted, true);
+    const second = await admit(req({ runId: 'run_b', estimate, readUsage: () => ({ ok: true, reading: reading(20, 0) }) }));
+    assert.equal(second.admitted, false, 'two 20-point bounds cannot fit 35 points of headroom');
+    assert.equal(second.windows.find((window) => window.kind === 'five-hour')?.reservedPercent, 20);
+  });
+
+  it('refuses a reading for a different account', async () => {
+    box = sandbox();
+    const decision = await admit(req({ readUsage: () => ({ ok: true, reading: { ...reading(0, 0), subscriptionId: 'other' } }) }));
+    assert.equal(decision.admitted, false);
+    assert.match(decision.outcome?.summary ?? '', /belongs to other/);
+    assert.deepEqual(listReservations(), []);
+  });
+
   it('holds headroom so a second dispatcher cannot spend it twice', async () => {
     box = sandbox();
     const big = { ...ESTIMATE, fiveHourPercent: 20, uncertaintyPercent: 0 };
@@ -479,6 +519,18 @@ describe('a policy stored before windows were declared', () => {
 });
 
 describe('no reservation stays held once its run has stopped', () => {
+  for (const runtimeDispatched of [false, true, undefined]) {
+    it(`reclaims an unattached reservation only with affirmative never-dispatched proof (${String(runtimeDispatched)})`, async () => {
+      box = sandbox();
+      const admission = await admit(req());
+      const swept = sweepStrandedReservations([{ id: 'run_1', status: 'quota-waiting', reservationId: undefined,
+        promptNotSent: true, ...(runtimeDispatched !== undefined ? { runtimeDispatched } : {}) }]);
+      assert.equal(swept.length, runtimeDispatched === false ? 1 : 0);
+      assert.equal(listReservations()[0]?.state, runtimeDispatched === false ? 'released' : 'held');
+      assert.equal(listReservations()[0]?.id, admission.reservationId);
+    });
+  }
+
   async function reserve(runId: string): Promise<string> {
     const d = await admit(req({ taskId: `task-${runId}`, runId }));
     assert.equal(d.admitted, true, 'the fixture needs an admitted run to have a reservation');
@@ -757,15 +809,16 @@ describe('two loops admitting against one subscription at the same moment', () =
 
   it('never admits more than the room left after reservations and the margin', async () => {
     box = sandbox();
-    // 30 jobs are asked for. A job holds 2% of the five-hour window and 1% of the weekly once
-    // admitted, and needs 3% and 2% free to be admitted (the estimate plus 1 point of uncertainty).
-    // With 10% used and a 5% margin, the five-hour window has 60 - 10 - 5 = 45% to give and the
-    // weekly 40 - 10 - 5 = 25%. A job is admitted while 3 <= 45 - 2n and 2 <= 25 - n for the n
-    // already held, so n runs from 0 to 21: exactly twenty-two jobs fit.
+    // 30 jobs are asked for. A job needs 3% of the five-hour window and 2% of the weekly free
+    // to be admitted (the estimate plus 1 point of uncertainty), and once admitted holds the same:
+    // a reservation keeps its uncertainty. With 10% used and a 5% margin, the five-hour window has
+    // 60 - 10 - 5 = 45% to give and the weekly 40 - 10 - 5 = 25%. A job is admitted while
+    // 3 <= 45 - 3n and 2 <= 25 - 2n for the n already held, so n runs from 0 to 11: exactly
+    // twelve jobs fit.
     const [a, b] = await Promise.all([loopProcess(box.root, 'a'), loopProcess(box.root, 'b')]);
-    assert.equal(a + b, 22);
-    assert.equal(activeReservations(SUB).length, 22);
-    assert.equal(new Set(activeReservations(SUB).map((r) => r.taskId)).size, 22, 'each reservation is for a different job');
+    assert.equal(a + b, 12);
+    assert.equal(activeReservations(SUB).length, 12);
+    assert.equal(new Set(activeReservations(SUB).map((r) => r.taskId)).size, 12, 'each reservation is for a different job');
   });
 
   it('waits for another loop that is admitting against the same subscription', async () => {

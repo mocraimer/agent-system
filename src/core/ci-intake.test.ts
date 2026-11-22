@@ -9,6 +9,8 @@ import type { CiFailureEvent, IntakeConfig } from './ci-intake.js';
 import { attachRun, getJob, listJobs, saveJob } from './intake.js';
 import { OPERATOR, sandbox } from './testkit.js';
 import type { Sandbox } from './testkit.js';
+import { saveRun } from './run.js';
+import type { RunRecord } from './run.js';
 
 let box: Sandbox | undefined;
 afterEach(() => {
@@ -250,6 +252,30 @@ describe('a repair that may open a pull request', () => {
  * running, or describing a different candidate.
  */
 describe('a redelivery only reaches work that is still waiting', () => {
+  for (const proof of ['never dispatched', 'unknown', 'dispatched'] as const) {
+    it(`keeps attached ${proof} claim history while admitting only a proven safe redelivery`, () => {
+      box = sandbox(); writeFloor(FIXTURE_FLOOR);
+      const authority = grant();
+      const first = ingestCiFailure(event(), CONFIG);
+      const job = first.job!;
+      const claim: RunRecord = {
+        id: 'abandoned_claim', taskId: job.taskId, attempt: 1,
+        authority: { type: 'grant', id: authority.id, version: 1 }, limits: authority.perTask,
+        runtime: 'pi-local', profile: 'default', actions: ['author-changes'],
+        settings: { requested: { model: 'vendor-default', effort: 'vendor-default' },
+          resolved: { model: 'vendor-default', effort: 'vendor-default' }, observed: { model: 'unknown', effort: 'unknown' } },
+        startedAt: new Date().toISOString(), status: 'quota-waiting',
+        runtimeDispatched: proof === 'dispatched', ...(proof !== 'unknown' ? { promptNotSent: true as const } : {}),
+      };
+      saveRun(claim);
+      attachRun(job.id, claim);
+      const second = ingestCiFailure(event(), CONFIG);
+      assert.equal(second.outcome.kind, proof === 'never dispatched' ? 'ready-to-dispatch' : 'refused');
+      assert.deepEqual(getJob(job.id)?.runIds, [claim.id]);
+      assert.deepEqual(getJob(job.id)?.outstandingObligations, CONFIG.obligations);
+    });
+  }
+
   /**
    * submitJob guarantees one Job per key. It does not guarantee one repair or
    * one run, so a job with runs already attached is not something a redelivery

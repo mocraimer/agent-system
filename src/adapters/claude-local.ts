@@ -126,6 +126,7 @@ export class ClaudeLocalAdapter implements RuntimeAdapter {
   }
 
   private async dispatchIn(input: DispatchInput, worker: WorkerEnvironment): Promise<DispatchResult> {
+    if (input.entry === 'interactive') throw new Error('Legacy adapter cannot execute guarded interactive work.');
     const resolved = resolveSettings(this.capabilities, input.settings, {
       model: input.approvedTier?.model ?? 'claude-opus-5-5',
       effort: input.approvedTier?.effort ?? 'medium',

@@ -1,14 +1,17 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { archivedTarget, assertNotArchived, interactiveArchive, interactiveArchiveLookup, interactiveArchiveReconcile } from './core/interactive-archive.js';
+import { interactiveClaim, interactiveLookup, interactiveSubmit, interactiveSessionRecord, interactiveEvidencePin, interactiveReviewRecord, interactiveRuntimeResultRecord, isReceivedInteractiveSubmission, currentAuthoritySettings } from './core/interactive.js';
 import { createHash } from 'node:crypto';
+import { hostname } from 'node:os';
 import { buildIdentityView, loadedBuild } from './core/build.js';
 import { join } from 'node:path';
-import { admit, getPolicy, listReservations, markOutstanding, releaseReservation, savePolicy, sweepStrandedReservations,
+import { admitWithReading, getPolicy, listReservations, markOutstanding, releaseReservation, savePolicy, sweepStrandedReservations,
 } from './core/admission.js';
 import type { AdmissionDecision, SubscriptionPolicy, UsageEstimate } from './core/admission.js';
 import { getLedgerPolicy, listCalls, remainingUsd, setLedgerPolicy } from './core/ledger.js';
 import type { CallReservation, LedgerPolicy } from './core/ledger.js';
 import type {
-  ActionId, Actor, Approval, ApprovalInput, AuthorityRef, DispatchRequest, Grant, GrantInput,
+  ActionId, Actor, Approval, ApprovalInput, AuthorityDecision, AuthorityRef, DispatchRequest, Grant, GrantInput,
   NarrowInput, PerTaskLimits, RuntimeId,
 } from './core/authority.js';
 import {
@@ -16,6 +19,7 @@ import {
   getApproval, getGrant, listApprovals, listGrants, narrowGrant, revokeGrant,
 } from './core/authority.js';
 import { authorizeDispatch, FORBIDDEN_ACTIONS } from './core/authorize.js';
+import { authorityPreviewForOperator, authorityConfirmationRecord } from './core/interactive-authority.js';
 import type { Outcome } from './core/outcome.js';
 import { activeRuns, getRun, listRuns, newRunId, saveRun, spentAttempts } from './core/run.js';
 import type { RunRecord } from './core/run.js';
@@ -23,7 +27,7 @@ import { attachRun, getJob, listJobs, mayDispatchAgain, reconcileUnsettled } fro
 import type { Job, ReconcileReport, Reconciler } from './core/intake.js';
 import { ingestCiFailure } from './core/ci-intake.js';
 import type { CiFailureEvent, IntakeConfig, IntakeResult } from './core/ci-intake.js';
-import { readJson, stateRoot, withLock, writeJson } from './core/store.js';
+import { readJson, stateRoot, withDispatchFence, withLock, writeJson } from './core/store.js';
 import type { CandidateIdentity } from './core/run.js';
 import type { EvidenceItem, RequiredCheck, AggregateReport } from './core/evidence.js';
 import { aggregate, assertOperatorDeferrals } from './core/evidence.js';
@@ -85,6 +89,7 @@ export type AdapterFactory = (runtime: RuntimeId) => RuntimeAdapter;
 
 export const VALID_ACTIONS: readonly ActionId[] = [
   'author-changes', 'open-pr', 'push-branch', 'review', 'run-verification', 'deploy-dev', 'merge-dev',
+  'conversation', 'task-tools', 'delegate-task',
 ];
 
 export const ESTIMATE_BASES: readonly UsageEstimate['basis'][] = [
@@ -221,7 +226,8 @@ export interface DispatchTaskInput {
   estimate: UsageEstimate;
   timeoutMs?: number;
   /** How the prompt reaches the runtime; see `DispatchInput.entry`. Defaults to the skill entry. */
-  entry?: 'skill' | 'review-pr' | 'prompt';
+  entry?: 'skill' | 'review-pr' | 'prompt' | 'interactive';
+  interactive?: { requestId: string; conversationId: string; parentRunId?: string };
   /** The versioned template the prompt was rendered from, recorded on the run's settings snapshot. */
   promptVersion?: { template: string; digest: string };
   outputPath?: string;
@@ -241,6 +247,16 @@ export interface DispatchCommandResult {
   limits?: PerTaskLimits;
   admission?: AdmissionDecision;
   run?: RunRecord;
+}
+
+interface DispatchClaim {
+  decision: Extract<AuthorityDecision, { allowed: true }>;
+  admission: AdmissionDecision;
+  recordedInFlight: RunRecord;
+  attemptInput: DispatchTaskInput;
+  sessionId: string | undefined;
+  runId: string;
+  evidenceDir: string;
 }
 
 /**
@@ -298,8 +314,10 @@ function finalizeDispatchedRun(
         },
       };
     }
+    delete record.dispatchOwner;
     saveRun(record);
-    settleDispatchedReservation(admission.reservationId, outcome);
+    if (record.interactive && record.promptNotSent === true && record.runtimeDispatched === false && admission.reservationId) releaseReservation(admission.reservationId, 'Guarded preprompt setup ended without sending input; no future exposure.');
+    else settleDispatchedReservation(admission.reservationId, outcome);
     persistScorecard(record, outcome, repo, workClass, admission);
     return { run: record, outcome };
   });
@@ -509,31 +527,43 @@ function mutateCheckList(
   });
 }
 
+/** Archived/prepared audit bytes are immutable, including legacy owner evidence writers. */
+function mutateUnarchivedAudit<T>(scorecardId: string, mutate: () => T): T {
+  return withDispatchFence(() => {
+    const card = getScorecard(scorecardId);
+    if (card) {
+      assertNotArchived({ taskId: card.taskId });
+      for (const runId of card.runIds) assertNotArchived({ taskId: card.taskId, runId });
+    }
+    return mutate();
+  });
+}
+
 /** Record a human verdict; agent/evaluation text cannot supply the actor. */
 export function feedbackRecord(actor: Actor, scorecardId: string, input: FeedbackInput): Scorecard {
   assertOperator(actor);
   if (!['accepted', 'rework-needed', 'rejected'].includes(input.verdict)) {
     throw new CommandInputError(`Feedback verdict must be accepted, rework-needed or rejected.`);
   }
-  return recordFeedback(scorecardId, { verdict: input.verdict, by: actor.id, reason: input.reason });
+  return mutateUnarchivedAudit(scorecardId, () => recordFeedback(scorecardId, { verdict: input.verdict, by: actor.id, reason: input.reason }));
 }
 
 /** Evidence is operator-attested data; it grants no authority or acceptance. */
 export function checkResultRecord(actor: Actor, scorecardId: string, input: CheckInput): Scorecard {
   assertOperator(actor);
-  return recordCheckResult(scorecardId, input);
+  return mutateUnarchivedAudit(scorecardId, () => recordCheckResult(scorecardId, input));
 }
 
 export function reviewRecord(actor: Actor, scorecardId: string, input: ReviewInput): Scorecard {
   assertOperator(actor);
-  return recordReview(scorecardId, input);
+  return mutateUnarchivedAudit(scorecardId, () => recordReview(scorecardId, input));
 }
 
 export function repairRecord(
   actor: Actor, scorecardId: string, input: RepairInput,
 ): Scorecard {
   assertOperator(actor);
-  return recordRepairCycle(scorecardId, input);
+  return mutateUnarchivedAudit(scorecardId, () => recordRepairCycle(scorecardId, input));
 }
 
 export function versionActivate(actor: Actor, input: ActivateInput): ActiveVersionRecord {
@@ -779,13 +809,15 @@ function repairPiStop(run: RunRecord): void {
 /** Replay a terminal run onto its latest card after either stop attestation or recovery. */
 function repairTerminalScorecard(runId: string, manualReplay = false): void {
   const run = getRun(runId);
-  if (!run || (run.status !== 'completed' && run.status !== 'checks-failed')) return;
+  if (!run || (run.status !== 'completed' && run.status !== 'checks-failed'
+    && !(run.status === 'quota-waiting' && run.promptNotSent === true))) return;
   const id = `card_${run.taskId}`;
   withLock(`scorecard-${id}`, () => {
     // Re-read under the card lock: a delayed recovery must not project its old
     // snapshot after a manual stop or a newer attempt has updated the card.
     const latest = getRun(runId);
-    if (!latest || (latest.status !== 'completed' && latest.status !== 'checks-failed')) return;
+    if (!latest || (latest.status !== 'completed' && latest.status !== 'checks-failed'
+      && !(latest.status === 'quota-waiting' && latest.promptNotSent === true))) return;
     const existing = getScorecard(id);
     const card = existing ?? (manualReplay && latest.repo && latest.workClass ? scorecardFromRun(latest, {
       repo: latest.repo, workClass: latest.workClass, workflowVersion: latest.build?.digest ?? 'unversioned',
@@ -827,19 +859,29 @@ export async function runStop(actor: Actor, runId: string, adapterFactory: Adapt
   if (!signalled) {
     throw new CommandInputError(`No live process for run ${runId} on this machine. If it ended without being recorded, recover unsettled work.`);
   }
-  const at = new Date().toISOString();
-  const id = `card_${run.taskId}`;
-  // A run's scorecard is written when its dispatch returns, which may be after
-  // this: the stop then starts the card from the run and its kept request, and
-  // the dispatch's own write keeps the stop.
-  const request = run.evidenceDir ? readJson<DispatchTaskInput>(join(run.evidenceDir, DISPATCH_REQUEST_FILE)) : undefined;
-  withLock(`scorecard-${id}`, () => {
-    const card = getScorecard(id) ?? (request ? scorecardFromRun(run, {
-      repo: request.repo, workClass: request.workClass, workflowVersion: run.build?.digest ?? 'unversioned',
-    }) : undefined);
-    if (card) saveScorecard({ ...card, stops: [...(card.stops ?? []), { runId, by: actor.id, at }] });
+  return withDispatchFence(() => {
+    // The stop was already sent. A delayed acknowledgement cannot append to a
+    // settled/archived inventory or claim that a fresh stop audit was recorded.
+    const latest = getRun(runId);
+    if (!latest) throw new CommandInputError(`Stop signal acknowledged for ${runId}, but its record is missing; no stop audit was published. Recover its retained history.`);
+    if (archivedTarget({ taskId: latest.taskId, runId: latest.id, ...latest.interactive })) throw new CommandInputError(`Stop signal acknowledged for ${runId}, but its family is archived/prepared; acknowledgement is stale and no stop audit was published. History remains read-only.`);
+    if (latest.status !== 'running') throw new CommandInputError(`Stop signal acknowledged for ${runId}, but it is now ${latest.status}; acknowledgement is stale and no stop audit was published. Inspect the retained result.`);
+    const at = new Date().toISOString();
+    const id = `card_${latest.taskId}`;
+    // The dispatch may not have created its card yet; ordinary finalization keeps the stop.
+    const request = latest.evidenceDir ? readJson<DispatchTaskInput>(join(latest.evidenceDir, DISPATCH_REQUEST_FILE)) : undefined;
+    withLock(`scorecard-${id}`, () => {
+      const card = getScorecard(id) ?? (request ? scorecardFromRun(latest, {
+        repo: request.repo, workClass: request.workClass, workflowVersion: latest.build?.digest ?? 'unversioned',
+      }) : undefined);
+      if (card) {
+        assertNotArchived({ taskId: card.taskId });
+        for (const linkedRunId of card.runIds) assertNotArchived({ taskId: card.taskId, runId: linkedRunId });
+        saveScorecard({ ...card, stops: [...(card.stops ?? []), { runId, by: actor.id, at }] });
+      }
+    });
+    return { runId, taskId: latest.taskId, stoppedBy: actor.id, at };
   });
-  return { runId, taskId: run.taskId, stoppedBy: actor.id, at };
 }
 
 /**
@@ -863,7 +905,7 @@ export async function runRedispatch(actor: Actor, runId: string, adapterFactory:
   )) {
     throw new CommandInputError(`Run ${runId} predates attempt-owned output paths. Its prompt may write over the earlier attempt; inspect its retained evidence and dispatch a new task explicitly instead of redispatching it.`);
   }
-  const decision = authorizeDispatch(toAuthorityRequest(request));
+  const decision = authorizeDispatch(toAuthorityRequest(request), { checkCapacity: false });
   if (!decision.allowed) return { outcome: decision.outcome, recovered: [], runtimeDispatched: false };
   if (decision.authority.id !== run.authority.id) {
     throw new CommandInputError(`${run.authority.type} ${run.authority.id}, which authorized run ${runId}, no longer covers its task; ${decision.authority.id} would. Dispatch it anew instead.`);
@@ -880,7 +922,7 @@ export async function runRedispatch(actor: Actor, runId: string, adapterFactory:
   const retryRequest = { ...request, ...(retryLoop ? { loop: retryLoop } : {}) };
   // Setup time is an observation of the original attempt, not part of its task.
   delete retryRequest.setupStartedAt;
-  return dispatchTask(retryRequest, adapterFactory);
+  return dispatchTask(retryRequest, adapterFactory, run.authority);
 }
 
 /** Reconcile only the selected runtime, or every runtime for the public recovery command. */
@@ -911,215 +953,278 @@ export async function recoverUnsettled(
   // reservation stranded by a run that already stopped would never be reached.
   // Sweeping here gives it the one supported way out.
   sweepStrandedReservations(
-    listRuns().map((run) => ({ id: run.id, status: run.status, reservationId: run.admissionId })),
+    listRuns().map((run) => ({ id: run.id, status: run.status, reservationId: run.admissionId,
+      ...(run.promptNotSent === true ? { promptNotSent: true as const } : {}),
+      ...(run.runtimeDispatched !== undefined ? { runtimeDispatched: run.runtimeDispatched } : {}) })),
   );
 
   return reports;
 }
 
+function archiveDispatchRefusal(input: DispatchTaskInput, recovered: ReconcileReport[] = []): DispatchCommandResult | undefined {
+  if (!archivedTarget({ taskId: input.taskId, ...(input.interactive ? { conversationId: input.interactive.conversationId, ...(input.interactive.parentRunId ? { parentRunId: input.interactive.parentRunId } : {}) } : {}) })) return undefined;
+  return { outcome: { kind: 'refused', taskId: input.taskId, summary: 'Task/conversation family has a prepared or committed archive cutoff; history is read-only.', nextAction: 'Reconcile unknown archive acknowledgement with the owner. Archive never cancels work or grants new authority.' }, recovered, runtimeDispatched: false };
+}
+
+/** Called only under the shared dispatch lock; no external reads or awaits. */
+function claimDispatch(
+  input: DispatchTaskInput, adapter: RuntimeAdapter, recovered: ReconcileReport[],
+  usage: UsageResult | undefined, expectedAuthority?: AuthorityRef,
+): DispatchCommandResult | DispatchClaim {
+  const archiveRefusal = archiveDispatchRefusal(input, recovered);
+  if (archiveRefusal) return archiveRefusal;
+  const authorityRequest = toAuthorityRequest(input);
+  let pendingRun: RunRecord | undefined;
+  try {
+    const interactiveEnvelope = interactiveClaim(input);
+    const decision = authorizeDispatch(authorityRequest);
+    if (!decision.allowed) return { outcome: decision.outcome, recovered, runtimeDispatched: false };
+    if (expectedAuthority && (decision.authority.id !== expectedAuthority.id || decision.authority.type !== expectedAuthority.type)) {
+      throw new CommandInputError(`${expectedAuthority.type} ${expectedAuthority.id} no longer covers this retry; dispatch it anew instead.`);
+    }
+
+    // A task without an explicit job id still cannot start a duplicate while one
+    // of its recovered runs is unresolved. Job-aware callers get the same check
+    // again below through mayDispatchAgain; this closes the task-only path too.
+    if (input.jobId === undefined) {
+      // A task intake raised has a job, and a dispatch that does not name it never
+      // attaches its run. The job then stays open with no runs, and the next
+      // delivery of the same signal sees no attempt to refuse and starts a second
+      // repair. Refusing here is what makes the redelivery guard mean anything,
+      // since fixing the printed hint only helps callers who read it.
+      const existing = listJobs().find((job) => job.taskId === input.taskId && job.state === 'open');
+      if (existing) {
+        const outcome: Outcome = {
+          kind: 'refused',
+          taskId: input.taskId,
+          summary: `Task ${input.taskId} belongs to job ${existing.id}; a dispatch that does not name it would leave the run unattached.`,
+          nextAction: `Dispatch it with \`--job ${existing.id}\` so the attempt is recorded against the work it belongs to.`,
+          details: { job: existing.id },
+        };
+        return { outcome, recovered, runtimeDispatched: false };
+      }
+
+      const blocked = recovered.filter((report) => {
+        if (!report.blocksNewAttempt) return false;
+        return listRuns().find((run) => run.id === report.runId)?.taskId === input.taskId;
+      });
+      if (blocked.length > 0) {
+        const outcome: Outcome = {
+          kind: 'remote-uncertain',
+          taskId: input.taskId,
+          summary: `${blocked.length} earlier run(s) for this task have unresolved remote state.`,
+          nextAction:
+            'Resolve or explicitly abandon those sessions first. Launching a second worker while the first is unaccounted for is how one task becomes two.',
+          details: { runs: blocked.map((report) => `${report.runId}: ${report.outcome.summary}`) },
+        };
+        return { outcome, recovered, runtimeDispatched: false };
+      }
+    }
+
+    const runId = newRunId();
+    const evidenceDir = join(stateRoot(), 'evidence', runId);
+    const attempt = spentAttempts(input.taskId).length + 1;
+    const sessionId = adapter.newSessionId?.();
+    // Each dispatch owns its output, even when replaying an earlier request.
+    const attemptOutput = input.outputPath ? join(evidenceDir, 'output.md') : undefined;
+    const attemptInput = attemptOutput ? { ...input, outputPath: attemptOutput, prompt: input.prompt.split(input.outputPath!).join(attemptOutput) } : input;
+    const inFlight: RunRecord = {
+      id: runId,
+      taskId: input.taskId,
+      ...(input.interactive && interactiveEnvelope ? { interactive: { ...input.interactive, ...interactiveEnvelope } } : {}),
+      attempt,
+      ...(sessionId ? { sessionId } : {}),
+      authority: decision.authority,
+      limits: decision.limits,
+      runtime: input.runtime,
+      profile: input.profile,
+      actions: input.actions,
+      settings: {
+        requested: {
+          model: input.settings.model ?? 'vendor-default',
+          effort: input.settings.effort ?? 'vendor-default',
+        },
+        // Seeded with what is already decided, in the precedence `resolveSettings`
+        // uses: the caller's explicit setting, then the approved tier, then the
+        // vendor default. The adapter's own snapshot replaces this when it returns.
+        //
+        // Hard-coding vendor defaults here recorded `vendor-default/vendor-default`
+        // for a tiered run whenever the adapter never returned — a quota refusal, a
+        // status read taken during dispatch, an adapter throw, or the process dying.
+        // Those are exactly the records someone later reads to find out what a run
+        // was authorized to spend.
+        resolved: {
+          model: input.settings.model ?? decision.tier?.model ?? 'vendor-default',
+          effort: input.settings.effort ?? decision.tier?.effort ?? 'vendor-default',
+        },
+        observed: { model: 'unknown', effort: 'unknown' },
+        ...(input.promptVersion ? { prompt: input.promptVersion } : {}),
+      },
+      startedAt: new Date().toISOString(),
+      status: 'running',
+      evidenceDir,
+      build: loadedBuild,
+      repo: input.repo,
+      workClass: input.workClass,
+      runtimeDispatched: false,
+      dispatchOwner: { host: hostname(), pid: process.pid },
+      ...(input.loop ? { loop: input.loop } : {}),
+      ...(attemptOutput ? { outputPath: attemptOutput } : {}),
+      promptDigest: createHash('sha256').update(attemptInput.prompt).digest('hex'),
+      delivery: { status: 'unverified', reason: 'No task artifact has been verified.', evidence: [] },
+      timing: { setupStartedAt: input.setupStartedAt ?? new Date().toISOString() },
+    };
+
+    // Publish before the reservation: a crash between these writes leaves a
+    // recoverable never-dispatched claim, not headroom with no owning run.
+    pendingRun = inFlight;
+    saveRun(inFlight);
+    const admission = admitWithReading({
+      subscriptionId: adapter.capabilities.subscriptionId,
+      taskId: input.taskId,
+      runId,
+      estimate: input.estimate,
+    }, usage);
+    if (!admission.admitted) {
+      // Admission can refuse before the runtime is reached. Keep that refusal as
+      // non-executed history so quota failures are visible without making them
+      // consume the task's attempt budget (authorize.ts excludes quota-waiting).
+      const outcome = admission.outcome!;
+      const refused: RunRecord = {
+        ...inFlight,
+        endedAt: new Date().toISOString(),
+        status: outcome.kind,
+        summary: outcome.summary,
+      };
+      saveRun(refused);
+      persistScorecard(refused, outcome, input.repo, input.workClass, admission);
+      return {
+        outcome,
+        recovered,
+        authority: decision.authority,
+        limits: decision.limits,
+        admission,
+        run: refused,
+        runtimeDispatched: false,
+      };
+    }
+
+    // The run is durable before vendor dispatch. A process dying here leaves the
+    // session deliberately uncertain instead of disappearing or looking cancelled.
+    const recordedInFlight: RunRecord = {
+      ...inFlight,
+      ...(admission.reservationId ? { admissionId: admission.reservationId } : {}),
+    };
+    saveRun(recordedInFlight);
+
+    if (input.jobId !== undefined) {
+      const job = getJob(input.jobId);
+      if (!job || job.taskId !== input.taskId || job.repo !== input.repo || job.workClass !== input.workClass || job.state !== 'open') {
+        const outcome: Outcome = {
+          kind: 'refused',
+          taskId: input.taskId,
+          runId,
+          summary: !job ? `Job ${input.jobId} does not exist; the run was not sent to the runtime.`
+            : `Job ${input.jobId} is not open for this task/repository/work class; the run was not sent to the runtime.`,
+          nextAction: 'Use the jobs view to find the existing job, or dispatch without a job id.',
+        };
+        const record: RunRecord = {
+          ...recordedInFlight,
+          status: 'refused',
+          endedAt: new Date().toISOString(),
+          summary: outcome.summary,
+        };
+        saveRun(record);
+        if (admission.reservationId) releaseReservation(admission.reservationId, 'job did not exist');
+        persistScorecard(record, outcome, input.repo, input.workClass, admission);
+        return { outcome, recovered, admission, run: record, runtimeDispatched: false };
+      }
+      const blocked = mayDispatchAgain(input.jobId, recovered);
+      if (blocked) {
+        const record: RunRecord = {
+          ...recordedInFlight,
+          status: 'quota-waiting',
+          runtimeDispatched: false,
+          promptNotSent: true,
+          endedAt: new Date().toISOString(),
+          summary: blocked.summary,
+        };
+        delete record.dispatchOwner;
+        saveRun(record);
+        // Only this never-dispatched attempt is released; the earlier uncertain run keeps its reservation.
+        if (admission.reservationId) releaseReservation(admission.reservationId, 'earlier run unresolved; this attempt was not dispatched');
+        persistScorecard(record, blocked, input.repo, input.workClass, admission);
+        return { outcome: blocked, recovered, admission, run: record, runtimeDispatched: false };
+      }
+      // The CLI and MCP both retain the job's artifacts and obligations through this attachment.
+      // The existence check above happens before the adapter runs.
+      attachRun(job.id, recordedInFlight);
+    }
+
+    // What was asked, kept beside the run's evidence so the same task can be sent
+    // again under the same authority after a stop. No credential is part of it.
+    mkdirSync(evidenceDir, { recursive: true });
+    writeFileSync(join(evidenceDir, DISPATCH_REQUEST_FILE), JSON.stringify(attemptInput, null, 2), 'utf8');
+    recordedInFlight.runtimeDispatched = true;
+    recordedInFlight.timing = { ...recordedInFlight.timing, dispatchStartedAt: new Date().toISOString() };
+    persistScorecard(recordedInFlight, { kind: 'remote-uncertain', summary: 'Runtime dispatch in progress.', nextAction: 'Wait for completion or reconcile.' }, input.repo, input.workClass, admission);
+    saveRun(recordedInFlight);
+    return { decision, admission, recordedInFlight, attemptInput, sessionId, runId, evidenceDir };
+  } catch (err) {
+    // No adapter has been called. A synchronous setup failure must not leave a
+    // live PID owning a claim that this caller will never use.
+    if (pendingRun) {
+      const stopped: RunRecord = { ...pendingRun, status: 'quota-waiting', runtimeDispatched: false,
+        promptNotSent: true, endedAt: new Date().toISOString(),
+        summary: `Dispatch setup failed before runtime execution: ${err instanceof Error ? err.message : String(err)}` };
+      delete stopped.dispatchOwner;
+      try {
+        saveRun(stopped);
+        for (const reservation of listReservations()) {
+          if (reservation.runId === stopped.id && reservation.taskId === stopped.taskId) {
+            releaseReservation(reservation.id, 'Dispatch setup failed before runtime execution.');
+          }
+        }
+      } catch (cleanupError) {
+        throw new AggregateError([err, cleanupError], 'Dispatch setup failed and its claim could not be released; recover before retrying.');
+      }
+    }
+    throw err;
+  }
+}
+
 /**
- * Run the CLI's dispatch sequence for any client.
- *
- * Authority is checked before recovery and admission. This means a pending MCP
- * request cannot make a vendor status call, reserve allowance, or create a run.
- * Once a request has an authority match, recovery across all runtimes and a second
- * authorization check close the small window in which a grant could have been
- * revoked or a run could have become concurrent.
+ * Run the shared dispatch sequence for CLI, MCP, UI, loop and retry callers.
+ * Authority scope precedes any vendor call. After recovery and the usage read,
+ * one synchronous cross-process claim checks current authority, reserves account
+ * headroom and publishes the run. Revocation uses that same lock. Neither vendor
+ * reads nor real jobs hold it.
  */
 export async function dispatchTask(
   input: DispatchTaskInput,
   adapterFactory: AdapterFactory = adapterFor,
+  expectedAuthority?: AuthorityRef,
 ): Promise<DispatchCommandResult> {
   assertDispatchInput(input);
+  const archiveRefusal = archiveDispatchRefusal(input);
+  if (archiveRefusal) return archiveRefusal;
+  if (input.actions.some(action => ['conversation', 'task-tools', 'delegate-task'].includes(action)) && !isReceivedInteractiveSubmission(input)) {
+    return { outcome: { kind: 'refused', taskId: input.taskId, summary: 'Interactive capabilities require a durable guarded interactive submission; legacy CLI/MCP/UI dispatch entries cannot execute them.', nextAction: 'Submit through the guarded interactive API, or use existing coding actions under their original authority.' }, recovered: [], runtimeDispatched: false };
+  }
   const authorityRequest = toAuthorityRequest(input);
-  const initial = authorizeDispatch(authorityRequest);
+  const initial = authorizeDispatch(authorityRequest, { checkCapacity: false });
   if (!initial.allowed) return { outcome: initial.outcome, recovered: [], runtimeDispatched: false };
 
   const adapter = adapterFactory(input.runtime);
-  // A task's concurrency limit is per task, not per runtime. Reconcile every
-  // runtime before dispatching so a stale run on another adapter cannot be
-  // mistaken for free capacity.
+  if (input.entry === 'interactive' && adapter.guardedInteractive !== true) return { outcome: { kind: 'setup-blocked', taskId: input.taskId, summary: 'This adapter has no guarded interactive tool boundary.', nextAction: 'Configure an explicitly guarded Pi-local or Claude-local adapter.' }, recovered: [], runtimeDispatched: false };
+  // Task concurrency spans runtimes. Reconcile every adapter before claiming.
   const recovered = await recoverUnsettled(undefined, adapterFactory);
-  const decision = authorizeDispatch(authorityRequest);
-  if (!decision.allowed) return { outcome: decision.outcome, recovered, runtimeDispatched: false };
-
-  // A task without an explicit job id still cannot start a duplicate while one
-  // of its recovered runs is unresolved. Job-aware callers get the same check
-  // again below through mayDispatchAgain; this closes the task-only path too.
-  if (input.jobId === undefined) {
-    // A task intake raised has a job, and a dispatch that does not name it never
-    // attaches its run. The job then stays open with no runs, and the next
-    // delivery of the same signal sees no attempt to refuse and starts a second
-    // repair. Refusing here is what makes the redelivery guard mean anything,
-    // since fixing the printed hint only helps callers who read it.
-    const existing = listJobs().find((job) => job.taskId === input.taskId && job.state === 'open');
-    if (existing) {
-      const outcome: Outcome = {
-        kind: 'refused',
-        taskId: input.taskId,
-        summary: `Task ${input.taskId} belongs to job ${existing.id}; a dispatch that does not name it would leave the run unattached.`,
-        nextAction: `Dispatch it with \`--job ${existing.id}\` so the attempt is recorded against the work it belongs to.`,
-        details: { job: existing.id },
-      };
-      return { outcome, recovered, runtimeDispatched: false };
-    }
-
-    const blocked = recovered.filter((report) => {
-      if (!report.blocksNewAttempt) return false;
-      return listRuns().find((run) => run.id === report.runId)?.taskId === input.taskId;
-    });
-    if (blocked.length > 0) {
-      const outcome: Outcome = {
-        kind: 'remote-uncertain',
-        taskId: input.taskId,
-        summary: `${blocked.length} earlier run(s) for this task have unresolved remote state.`,
-        nextAction:
-          'Resolve or explicitly abandon those sessions first. Launching a second worker while the first is unaccounted for is how one task becomes two.',
-        details: { runs: blocked.map((report) => `${report.runId}: ${report.outcome.summary}`) },
-      };
-      return { outcome, recovered, runtimeDispatched: false };
-    }
-  }
-
-  const runId = newRunId();
-  const evidenceDir = join(stateRoot(), 'evidence', runId);
-  const attempt = spentAttempts(input.taskId).length + 1;
-  const sessionId = adapter.newSessionId?.();
-  // Each dispatch owns its output, even when replaying an earlier request.
-  const attemptOutput = input.outputPath ? join(evidenceDir, 'output.md') : undefined;
-  const attemptInput = attemptOutput ? { ...input, outputPath: attemptOutput, prompt: input.prompt.split(input.outputPath!).join(attemptOutput) } : input;
-  const inFlight: RunRecord = {
-    id: runId,
-    taskId: input.taskId,
-    attempt,
-    ...(sessionId ? { sessionId } : {}),
-    authority: decision.authority,
-    limits: decision.limits,
-    runtime: input.runtime,
-    profile: input.profile,
-    actions: input.actions,
-    settings: {
-      requested: {
-        model: input.settings.model ?? 'vendor-default',
-        effort: input.settings.effort ?? 'vendor-default',
-      },
-      // Seeded with what is already decided, in the precedence `resolveSettings`
-      // uses: the caller's explicit setting, then the approved tier, then the
-      // vendor default. The adapter's own snapshot replaces this when it returns.
-      //
-      // Hard-coding vendor defaults here recorded `vendor-default/vendor-default`
-      // for a tiered run whenever the adapter never returned — a quota refusal, a
-      // status read taken during dispatch, an adapter throw, or the process dying.
-      // Those are exactly the records someone later reads to find out what a run
-      // was authorized to spend.
-      resolved: {
-        model: input.settings.model ?? decision.tier?.model ?? 'vendor-default',
-        effort: input.settings.effort ?? decision.tier?.effort ?? 'vendor-default',
-      },
-      observed: { model: 'unknown', effort: 'unknown' },
-      ...(input.promptVersion ? { prompt: input.promptVersion } : {}),
-    },
-    startedAt: new Date().toISOString(),
-    status: 'running',
-    evidenceDir,
-    build: loadedBuild,
-    repo: input.repo,
-    workClass: input.workClass,
-    runtimeDispatched: false,
-    ...(input.loop ? { loop: input.loop } : {}),
-    ...(attemptOutput ? { outputPath: attemptOutput } : {}),
-    promptDigest: createHash('sha256').update(attemptInput.prompt).digest('hex'),
-    delivery: { status: 'unverified', reason: 'No task artifact has been verified.', evidence: [] },
-    timing: { setupStartedAt: input.setupStartedAt ?? new Date().toISOString() },
-  };
-
-  const admission = await admit({
-    subscriptionId: adapter.capabilities.subscriptionId,
-    taskId: input.taskId,
-    runId,
-    estimate: input.estimate,
-    readUsage: () => adapter.readUsage(),
-  });
-  if (!admission.admitted) {
-    // Admission can refuse before the runtime is reached. Keep that refusal as
-    // non-executed history so quota failures are visible without making them
-    // consume the task's attempt budget (authorize.ts excludes quota-waiting).
-    const outcome = admission.outcome!;
-    const refused: RunRecord = {
-      ...inFlight,
-      endedAt: new Date().toISOString(),
-      status: outcome.kind,
-      summary: outcome.summary,
-    };
-    saveRun(refused);
-    persistScorecard(refused, outcome, input.repo, input.workClass, admission);
-    return {
-      outcome,
-      recovered,
-      authority: decision.authority,
-      limits: decision.limits,
-      admission,
-      run: refused,
-      runtimeDispatched: false,
-    };
-  }
-
-  // The run is durable before vendor dispatch. A process dying here leaves the
-  // session deliberately uncertain instead of disappearing or looking cancelled.
-  const recordedInFlight: RunRecord = {
-    ...inFlight,
-    ...(admission.reservationId ? { admissionId: admission.reservationId } : {}),
-  };
-  saveRun(recordedInFlight);
-
-  if (input.jobId !== undefined) {
-    const job = getJob(input.jobId);
-    if (!job) {
-      const outcome: Outcome = {
-        kind: 'refused',
-        taskId: input.taskId,
-        runId,
-        summary: `Job ${input.jobId} does not exist; the run was not sent to the runtime.`,
-        nextAction: 'Use the jobs view to find the existing job, or dispatch without a job id.',
-      };
-      const record: RunRecord = {
-        ...recordedInFlight,
-        status: 'refused',
-        endedAt: new Date().toISOString(),
-        summary: outcome.summary,
-      };
-      saveRun(record);
-      if (admission.reservationId) releaseReservation(admission.reservationId, 'job did not exist');
-      persistScorecard(record, outcome, input.repo, input.workClass, admission);
-      return { outcome, recovered, admission, run: record, runtimeDispatched: false };
-    }
-    const blocked = mayDispatchAgain(input.jobId, recovered);
-    if (blocked) {
-      const record: RunRecord = {
-        ...recordedInFlight,
-        status: 'remote-uncertain',
-        endedAt: new Date().toISOString(),
-        summary: blocked.summary,
-      };
-      saveRun(record);
-      // Only this never-dispatched attempt is released; the earlier uncertain run keeps its reservation.
-      if (admission.reservationId) releaseReservation(admission.reservationId, 'earlier run unresolved; this attempt was not dispatched');
-      persistScorecard(record, blocked, input.repo, input.workClass, admission);
-      return { outcome: blocked, recovered, admission, run: record, runtimeDispatched: false };
-    }
-    // The CLI and MCP both retain the job's artifacts and obligations through this attachment.
-    // The existence check above happens before the adapter runs.
-    attachRun(job.id, recordedInFlight);
-  }
-
-  // What was asked, kept beside the run's evidence so the same task can be sent
-  // again under the same authority after a stop. No credential is part of it.
-  mkdirSync(evidenceDir, { recursive: true });
-  writeFileSync(join(evidenceDir, DISPATCH_REQUEST_FILE), JSON.stringify(attemptInput, null, 2), 'utf8');
-  recordedInFlight.runtimeDispatched = true;
-  recordedInFlight.timing = { ...recordedInFlight.timing, dispatchStartedAt: new Date().toISOString() };
-  saveRun(recordedInFlight);
-  persistScorecard(recordedInFlight, { kind: 'remote-uncertain', summary: 'Runtime dispatch in progress.', nextAction: 'Wait for completion or reconcile.' }, input.repo, input.workClass, admission);
+  const preflight = authorizeDispatch(authorityRequest);
+  if (!preflight.allowed) return { outcome: preflight.outcome, recovered, runtimeDispatched: false };
+  const usage = input.estimate.basis === 'none' ? undefined : await adapter.readUsage();
+  const claim = withLock('dispatch', () => claimDispatch(input, adapter, recovered, usage, expectedAuthority));
+  if ('outcome' in claim) return claim;
+  const { decision, admission, recordedInFlight, attemptInput, sessionId, runId, evidenceDir } = claim;
 
   let result: DispatchResult;
   try {
@@ -1133,6 +1238,7 @@ export async function dispatchTask(
       actions: input.actions,
       ...(sessionId ? { sessionId } : {}),
       ...(input.entry ? { entry: input.entry } : {}),
+      ...(input.interactive ? { interactive: input.interactive } : {}),
       ...(decision.tier ? { approvedTier: decision.tier } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
     });
@@ -1171,7 +1277,8 @@ export async function dispatchTask(
     };
     const record: RunRecord = {
       ...recordedInFlight,
-      ...(piFailure?.sessionId ? { sessionId: piFailure.sessionId } : {}),
+      ...(piFailure?.sessionId ? { sessionId: piFailure.sessionId } : getRun(runId)?.sessionId ? { sessionId: getRun(runId)!.sessionId! } : {}),
+      ...(getRun(runId)?.interactive ? { interactive: getRun(runId)!.interactive! } : {}),
       timing: { ...recordedInFlight.timing, providerEndedAt: new Date().toISOString() },
       status: outcome.kind,
       endedAt: new Date().toISOString(),
@@ -1188,8 +1295,9 @@ export async function dispatchTask(
     endedAt: new Date().toISOString(),
     status: result.outcome.kind,
     summary: result.outcome.summary,
-    ...(result.outcome.promptNotSent === true ? { promptNotSent: true } : {}),
+    ...(result.outcome.promptNotSent === true ? { promptNotSent: true, ...(input.entry === 'interactive' ? { runtimeDispatched: false } : {}) } : {}),
     ...(result.sessionId ? { sessionId: result.sessionId } : {}),
+    ...(getRun(runId)?.interactive ? { interactive: getRun(runId)!.interactive! } : {}),
     ...(result.skill ? { skill: result.skill } : {}),
     ...(admission.reservationId ? { admissionId: admission.reservationId } : {}),
   };
@@ -1205,7 +1313,7 @@ export async function dispatchTask(
   };
 }
 
-function toAuthorityRequest(input: DispatchTaskInput): DispatchRequest {
+export function toAuthorityRequest(input: DispatchTaskInput): DispatchRequest {
   return {
     repo: input.repo,
     workClass: input.workClass,
@@ -1224,7 +1332,7 @@ function toAuthorityRequest(input: DispatchTaskInput): DispatchRequest {
   };
 }
 
-function assertDispatchInput(input: DispatchTaskInput): void {
+export function assertDispatchInput(input: DispatchTaskInput): void {
   const strings = [
     ['taskId', input.taskId], ['repo', input.repo], ['workClass', input.workClass],
     ['profile', input.profile], ['prompt', input.prompt],
@@ -1304,6 +1412,18 @@ export interface CoordinatorCommands {
 
   recover(runtime?: RuntimeId): Promise<ReconcileReport[]>;
   dispatch(input: DispatchTaskInput): Promise<DispatchCommandResult>;
+  interactiveSubmit(input: DispatchTaskInput): ReturnType<typeof interactiveSubmit>;
+  interactiveLookup(requestId: string): ReturnType<typeof interactiveLookup>;
+  interactiveSessionRecord(runId: string, requestId: string, session: { id: string; file?: string }): RunRecord;
+  interactiveEvidencePin: typeof interactiveEvidencePin;
+  interactiveReviewRecord: typeof interactiveReviewRecord;
+  authorityPreviewForOperator: typeof authorityPreviewForOperator;
+  authorityConfirmationRecord: typeof authorityConfirmationRecord;
+  interactiveRuntimeResultRecord: typeof interactiveRuntimeResultRecord;
+  interactiveArchive: typeof interactiveArchive;
+  interactiveArchiveLookup: typeof interactiveArchiveLookup;
+  interactiveArchiveReconcile: typeof interactiveArchiveReconcile;
+  currentAuthoritySettings(runId: string, action?: ActionId, requireRunning?: boolean): ReturnType<typeof currentAuthoritySettings>;
   runStop(actor: Actor, runId: string): Promise<RunStopResult>;
   resolvePiStopped(actor: Actor, input: ResolvePiInput): RunRecord;
   runRedispatch(actor: Actor, runId: string): Promise<DispatchCommandResult>;
@@ -1346,6 +1466,18 @@ export function createCoordinatorCommands(
     intakeFailure,
     recover: (runtime) => recoverUnsettled(runtime, adapterFactory),
     dispatch: (input) => dispatchTask(input, adapterFactory),
+    interactiveSubmit: (input) => interactiveSubmit(input, request => dispatchTask(request, adapterFactory)),
+    interactiveLookup,
+    interactiveSessionRecord,
+    interactiveEvidencePin,
+    interactiveReviewRecord,
+    authorityPreviewForOperator,
+    authorityConfirmationRecord,
+    interactiveRuntimeResultRecord,
+    interactiveArchive,
+    interactiveArchiveLookup,
+    interactiveArchiveReconcile,
+    currentAuthoritySettings,
     runStop: (actor, runId) => runStop(actor, runId, adapterFactory),
     resolvePiStopped,
     runRedispatch: (actor, runId) => runRedispatch(actor, runId, adapterFactory),
@@ -1355,6 +1487,8 @@ export function createCoordinatorCommands(
 export const commands = createCoordinatorCommands();
 
 /** Public type surface for UI/client implementations; the implementations stay in the coordinator. */
+export type { AuthorityConfirmationInput, AuthorityConfirmationReceipt } from './core/interactive-authority.js';
+export type { InteractiveArchiveInput, InteractiveArchiveReceipt, InteractiveArchiveObservation, InteractiveArchiveCommit, InteractiveArchiveObserve } from './core/interactive-archive.js';
 export type {
   ActionId, Actor, Approval, ApprovalInput, AuthorityRef, DispatchRequest, Grant, GrantInput,
   NarrowInput, PerTaskLimits, RuntimeId,

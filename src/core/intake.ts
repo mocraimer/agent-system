@@ -2,8 +2,10 @@ import { join } from 'node:path';
 import type { RuntimeId } from './authority.js';
 import type { Outcome } from './outcome.js';
 import type { RunRecord } from './run.js';
-import { getRun, listRuns, saveRun } from './run.js';
-import { listRecords, newId, readJson, readRecord, stateRoot, withLock, writeJson } from './store.js';
+import { dispatchOwnerPresent, getRun, holdsRunCapacity, listRuns, saveRun } from './run.js';
+import { listReservations, releaseReservation } from './admission.js';
+import { listRecords, newId, readJson, readRecord, stateRoot, withDispatchFence, withLock, writeJson } from './store.js';
+import { assertNotArchived } from './interactive-archive.js';
 
 /**
  * A unit of work as the operator or an event source sees it.
@@ -58,8 +60,29 @@ export function listJobs(): Job[] {
 export function getJob(id: string): Job | undefined {
   return readRecord<Job>('job', join(jobsDir(), `${id}.json`));
 }
-export function saveJob(job: Job): void {
+function assertJobWritable(job: Job): void {
+  assertNotArchived({ taskId: job.taskId });
+  for (const runId of job.runIds) {
+    assertNotArchived({ taskId: job.taskId, runId });
+    const run = getRun(runId);
+    if (run) assertNotArchived({ taskId: run.taskId, runId: run.id, ...run.interactive });
+  }
+}
+function mutateJob<T>(jobId: string, operation: () => T): T {
+  return withDispatchFence(() => withLock(`job-${jobId}`, () => {
+    const current = getJob(jobId);
+    if (current) assertJobWritable(current);
+    return operation();
+  }));
+}
+/** Internal publication, always under the dispatch fence and the owning mutation lock. */
+function writeJob(job: Job): void {
+  assertJobWritable(job);
   writeJson(join(jobsDir(), `${job.id}.json`), job);
+}
+/** Check both persisted and proposed links; changing taskId cannot erase a cutoff. */
+export function saveJob(job: Job): void {
+  mutateJob(job.id, () => writeJob(job));
 }
 
 export interface SubmitInput {
@@ -89,7 +112,9 @@ export interface SubmitResult {
  * the case that produces two jobs — and, downstream, two PRs for one CI failure.
  */
 export function submitJob(input: SubmitInput): SubmitResult {
-  return withLock(`intake-${input.idempotencyKey}`, () => {
+  // Job creation and run publication must agree on whether this task has a job.
+  return withDispatchFence(() => withLock(`intake-${input.idempotencyKey}`, () => {
+    assertNotArchived({ taskId: input.taskId });
     const indexPath = keyIndex(input.idempotencyKey);
     const existingId = readJson<{ jobId: string }>(indexPath)?.jobId;
     if (existingId) {
@@ -97,8 +122,7 @@ export function submitJob(input: SubmitInput): SubmitResult {
       // idempotency key. Without this the duplicate's read-modify-write can land
       // on top of a run another process just attached, erasing its run id and
       // artifact links — and a redelivery would then see no attempt to refuse.
-      // The lock order is always intake then job, so nothing here can deadlock
-      // against attachRun, which takes only the job lock.
+      // Writers use dispatch then intake/job; no job holder acquires dispatch.
       const existing = withLock(`job-${existingId}`, () => getJob(existingId));
       if (existing) {
         const updated: Job = {
@@ -106,12 +130,12 @@ export function submitJob(input: SubmitInput): SubmitResult {
           duplicateSubmissions: (existing.duplicateSubmissions ?? 0) + 1,
           updatedAt: new Date().toISOString(),
         };
-        withLock(`job-${existingId}`, () => {
+        mutateJob(existingId, () => {
           // Re-read inside the lock: the job may have gained runs or artifacts
           // between the read above and here, and those belong to whoever wrote
           // them, not to this delivery's snapshot.
           const current = getJob(existingId) ?? existing;
-          saveJob({
+          writeJob({
             ...current,
             duplicateSubmissions: (current.duplicateSubmissions ?? 0) + 1,
             updatedAt: updated.updatedAt,
@@ -139,10 +163,10 @@ export function submitJob(input: SubmitInput): SubmitResult {
       createdAt: now,
       updatedAt: now,
     };
-    saveJob(job);
+    writeJob(job);
     writeJson(indexPath, { jobId: job.id, key: input.idempotencyKey });
     return { job, created: true };
-  });
+  }));
 }
 
 /**
@@ -161,7 +185,7 @@ export function bindJobCandidate(
   jobId: string,
   candidate: { headSha?: string; prBase?: string },
 ): Job {
-  return withLock(`job-${jobId}`, () => {
+  return mutateJob(jobId, () => {
     const job = getJob(jobId);
     if (!job) throw new Error(`No job "${jobId}".`);
     if ((job.headSha !== undefined || candidate.headSha === undefined)
@@ -172,14 +196,16 @@ export function bindJobCandidate(
       ...(job.prBase === undefined && candidate.prBase !== undefined ? { prBase: candidate.prBase } : {}),
       updatedAt: new Date().toISOString(),
     };
-    saveJob(next);
+    writeJob(next);
     return next;
   });
 }
 
 /** Attach a run to its job, keeping artifacts and obligations across attempts. */
 export function attachRun(jobId: string, run: RunRecord): Job {
-  return withLock(`job-${jobId}`, () => {
+  return mutateJob(jobId, () => {
+    const linked = getRun(run.id) ?? run;
+    assertNotArchived({ taskId: linked.taskId, runId: linked.id, ...linked.interactive });
     const job = getJob(jobId);
     if (!job) throw new Error(`No job "${jobId}".`);
     const next: Job = {
@@ -188,7 +214,7 @@ export function attachRun(jobId: string, run: RunRecord): Job {
       artifacts: [...new Set([...job.artifacts, ...(run.evidenceDir ? [run.evidenceDir] : [])])],
       updatedAt: new Date().toISOString(),
     };
-    saveJob(next);
+    writeJob(next);
     return next;
   });
 }
@@ -201,7 +227,7 @@ export function attachRun(jobId: string, run: RunRecord): Job {
  * approved task, not to whichever attempt happens to finish.
  */
 export function dischargeObligations(jobId: string, satisfied: string[]): Job {
-  return withLock(`job-${jobId}`, () => {
+  return mutateJob(jobId, () => {
     const job = getJob(jobId);
     if (!job) throw new Error(`No job "${jobId}".`);
     const remaining = job.outstandingObligations.filter((o) => !satisfied.includes(o));
@@ -211,7 +237,7 @@ export function dischargeObligations(jobId: string, satisfied: string[]): Job {
       state: remaining.length === 0 ? 'settled' : job.state,
       updatedAt: new Date().toISOString(),
     };
-    saveJob(next);
+    writeJob(next);
     return next;
   });
 }
@@ -251,6 +277,42 @@ export async function reconcileUnsettled(
     // report at all. Saying its remote state is unknown would read as the answer to
     // a question nobody put.
     if (onlyRuntime !== undefined && run.runtime !== onlyRuntime) continue;
+
+    // A live dispatcher may still send the prompt. A vendor's "not found" here
+    // cannot settle its claim and authorize a second worker ahead of it.
+    if (dispatchOwnerPresent(run)) {
+      reports.push({
+        runId: run.id, before: run.status,
+        outcome: { kind: 'remote-uncertain', runId: run.id, taskId: run.taskId,
+          summary: 'The dispatcher still owns this attempt.', nextAction: 'Wait for it to settle before recovering.' },
+        blocksNewAttempt: true,
+      });
+      continue;
+    }
+    if (run.dispatchOwner && run.runtimeDispatched === false) {
+      const abandoned = withLock('dispatch', () => withLock(`run-${run.id}`, () => {
+        const latest = getRun(run.id);
+        if (!latest || dispatchOwnerPresent(latest) || latest.runtimeDispatched !== false
+          || (latest.status !== 'running' && latest.status !== 'remote-uncertain')) return undefined;
+        // Includes a reservation written before its id reached the run record.
+        for (const reservation of listReservations()) {
+          if (reservation.runId === latest.id && reservation.taskId === latest.taskId) {
+            releaseReservation(reservation.id, 'Dispatcher stopped before runtime dispatch.');
+          }
+        }
+        const next: RunRecord = { ...latest, status: 'quota-waiting', promptNotSent: true,
+          endedAt: new Date().toISOString(), summary: 'Dispatcher stopped before runtime dispatch; claim released.' };
+        delete next.dispatchOwner;
+        saveRun(next);
+        return next;
+      }));
+      if (abandoned) {
+        reports.push({ runId: run.id, before: run.status,
+          outcome: { kind: 'quota-waiting', runId: run.id, taskId: run.taskId, promptNotSent: true,
+            summary: abandoned.summary!, nextAction: 'Retry the dispatch under current authority.' }, blocksNewAttempt: false });
+        continue;
+      }
+    }
 
     const reconciler = byRuntime.get(run.runtime);
     if (!reconciler) {
@@ -313,14 +375,15 @@ export async function reconcileUnsettled(
     // stale snapshot over it or report a stale answer as still blocking dispatch.
     const { current, settledHere } = withLock(`run-${run.id}`, () => {
       const latest = getRun(run.id);
-      if (!latest || (latest.status !== 'running' && latest.status !== 'remote-uncertain')) {
+      if (!latest || dispatchOwnerPresent(latest) || (latest.status !== 'running' && latest.status !== 'remote-uncertain')) {
         return { current: latest, settledHere: false };
       }
       if (settled) {
-        const updated = {
+        const updated: RunRecord = {
           ...latest, status: outcome.kind, endedAt: new Date().toISOString(), summary: outcome.summary,
           ...(outcome.promptNotSent === true ? { promptNotSent: true as const } : {}),
         };
+        delete updated.dispatchOwner;
         saveRun(updated);
         return { current: updated, settledHere: true };
       }
@@ -355,11 +418,12 @@ export function mayDispatchAgain(jobId: string, reports: ReconcileReport[]): Out
   const job = getJob(jobId);
   if (!job) return undefined;
   const blocking = reports.filter((r) => job.runIds.includes(r.runId) && r.blocksNewAttempt);
-  if (blocking.length === 0) return undefined;
+  const active = job.runIds.map(getRun).filter((run) => run && holdsRunCapacity(run));
+  if (blocking.length === 0 && active.length === 0) return undefined;
   return {
     kind: 'remote-uncertain',
     taskId: job.taskId,
-    summary: `${blocking.length} earlier run(s) for this job have unresolved remote state.`,
+    summary: `${new Set([...blocking.map((r) => r.runId), ...active.map((r) => r!.id)]).size} earlier run(s) for this job have unresolved remote state.`,
     nextAction:
       'Resolve or explicitly abandon those sessions first. Launching a second worker while the first is unaccounted for is how one task becomes two.',
     details: { runs: blocking.map((b) => `${b.runId}: ${b.outcome.summary}`) },

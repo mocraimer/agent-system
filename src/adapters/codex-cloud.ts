@@ -247,6 +247,7 @@ export class CodexCloudAdapter implements RuntimeAdapter {
   }
 
   async dispatch(input: DispatchInput): Promise<DispatchResult> {
+    if (input.entry === 'interactive') throw new Error('Legacy adapter cannot execute guarded interactive work.');
     // Throws unless the profile accepts vendor-default, which is the point.
     // `approvedTier` is deliberately not read here: this runtime declares that it
     // takes neither setting, so an approval naming one is refused when it is

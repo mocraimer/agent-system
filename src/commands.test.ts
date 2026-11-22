@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
-import type { ApprovalInput, RuntimeId } from './core/authority.js';
+import type { ApprovalInput, GrantInput, RuntimeId } from './core/authority.js';
+import { revokeApproval } from './core/authority.js';
 import type { UsageResult } from './core/usage.js';
 import type { DispatchInput, DispatchResult, RuntimeAdapter, RuntimeCapabilities } from './adapters/types.js';
 import type { DispatchTaskInput, EvaluationInput } from './commands.js';
@@ -19,8 +21,9 @@ import {
 } from './commands.js';
 import { getScorecard, listScorecards, recordLoop, saveScorecard } from './eval/scorecard.js';
 import type { Scorecard } from './eval/scorecard.js';
-import { getRun, saveRun } from './core/run.js';
+import { activeRuns, dispatchesUnderAuthority, getRun, saveRun, spentAttempts } from './core/run.js';
 import { loadedBuild } from './core/build.js';
+import { withLockAsync } from './core/store.js';
 import { readOutput } from './loop/context.js';
 import { attestDelivery } from './loop/attest.js';
 import { FakeStore, SHA } from './loop/testkit.js';
@@ -37,11 +40,11 @@ const CAPS: RuntimeCapabilities = {
   skillInvocationForm: '/skill:auto <task>',
 };
 
-function reading(): UsageResult {
+function reading(subscriptionId = CAPS.subscriptionId): UsageResult {
   return {
     ok: true,
     reading: {
-      subscriptionId: CAPS.subscriptionId,
+      subscriptionId,
       observedAt: new Date().toISOString(),
       source: 'test adapter',
       windows: [
@@ -170,6 +173,354 @@ function approveReplayDispatch(layer: ReturnType<typeof createCoordinatorCommand
     limits: { maxAttempts: 3, maxConcurrentRuns: 1, maxPaidCallUsd: 1 },
   }).id;
 }
+
+describe('atomic dispatch claims', () => {
+  function grantInput(overrides: Partial<GrantInput> = {}): GrantInput {
+    return {
+      repos: [REPO], workClasses: ['ci-repair'], triggerSources: ['test'],
+      actions: ['author-changes'], runtimes: ['pi-local', 'claude-local'], profiles: ['default'],
+      perTask: { maxAttempts: 3, maxConcurrentRuns: 1, maxPaidCallUsd: 1 },
+      aggregate: { maxDispatchesPerWindow: 10, windowHours: 24, maxConcurrentRuns: 10 },
+      reason: 'atomic claim test', ...overrides,
+    };
+  }
+
+  for (const cap of ['task', 'task attempts', 'grant concurrency', 'grant dispatch window', 'subscription'] as const) {
+    it(`atomically enforces ${cap} across concurrent same-account callers`, async () => {
+      const s = sandbox();
+      try {
+        let release!: () => void;
+        let reads = 0;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        class ConcurrentAdapter extends FakeAdapter {
+          override async readUsage(): Promise<UsageResult> {
+            if (++reads === 2) release();
+            await gate;
+            return reading();
+          }
+          override async dispatch(request: DispatchInput): Promise<DispatchResult> {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            return super.dispatch(request);
+          }
+        }
+        const fake = new ConcurrentAdapter();
+        const layer = createCoordinatorCommands(() => fake);
+        layer.grantCreate(OPERATOR, grantInput({
+          ...(cap === 'task attempts' ? { perTask: { maxAttempts: 1, maxConcurrentRuns: 10, maxPaidCallUsd: 1 } } : {}),
+          ...(cap === 'grant concurrency' ? { aggregate: { maxDispatchesPerWindow: 10, windowHours: 24, maxConcurrentRuns: 1 } } : {}),
+          ...(cap === 'grant dispatch window' ? { aggregate: { maxDispatchesPerWindow: 1, windowHours: 24, maxConcurrentRuns: 10 } } : {}),
+        }));
+        const results = await Promise.all([0, 1].map((i) => layer.dispatch(input({
+          taskId: cap.startsWith('task') ? 'shared-task' : `task-${i}`, triggerSource: 'test',
+          runtime: i === 0 ? 'pi-local' : 'claude-local',
+          ...(cap === 'subscription' ? { estimate: { ...input().estimate, weeklyPercent: 20, uncertaintyPercent: 0 } } : {}),
+        }))));
+        assert.equal(results.filter((result) => result.runtimeDispatched).length, 1);
+        assert.equal(fake.dispatchCalls, 1);
+        assert.equal(results.find((result) => !result.runtimeDispatched)?.outcome.kind, cap === 'subscription' ? 'quota-waiting' : cap === 'task attempts' ? 'attempts-exhausted' : 'refused');
+        assert.equal(listReservations().length, 1);
+      } finally { s.cleanup(); }
+    });
+  }
+
+  for (const mutation of ['grant revocation', 'approval revocation', 'grant narrowing'] as const) {
+    it(`rechecks ${mutation} after an awaited usage read`, async () => {
+      const s = sandbox();
+      try {
+        let release!: () => void;
+        let entered!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        const ready = new Promise<void>((resolve) => { entered = resolve; });
+        class WaitingAdapter extends FakeAdapter {
+          override async readUsage(): Promise<UsageResult> { entered(); await gate; return reading(); }
+        }
+        const fake = new WaitingAdapter();
+        const layer = createCoordinatorCommands(() => fake);
+        const grant = layer.grantCreate(OPERATOR, grantInput());
+        const approvalId = mutation === 'approval revocation' ? approveTestDispatch(layer) : undefined;
+        const running = layer.dispatch(input({ triggerSource: 'test', ...(approvalId ? { approvalId } : {}) }));
+        await ready;
+        if (mutation === 'grant revocation') layer.grantRevoke(OPERATOR, grant.id, 'withdraw during admission');
+        else if (mutation === 'approval revocation') revokeApproval(OPERATOR, approvalId!);
+        else layer.grantNarrow(OPERATOR, grant.id, { actions: [], reason: 'withdraw action during admission' });
+        release();
+        const result = await running;
+        assert.equal(result.runtimeDispatched, false);
+        assert.equal(fake.dispatchCalls, 0);
+        assert.deepEqual(listReservations(), []);
+        assert.equal(layer.status().runs.length, 0);
+      } finally { s.cleanup(); }
+    });
+  }
+
+  it('releases a never-dispatched claim when synchronous setup meets an async scorecard holder', async () => {
+    const s = sandbox();
+    try {
+      const fake = new FakeAdapter();
+      const layer = createCoordinatorCommands(() => fake);
+      const approvalId = approveTestDispatch(layer);
+      await withLockAsync('scorecard-card_task_1', async () => {
+        await assert.rejects(layer.dispatch(input({ approvalId })), /busy in this process/);
+        assert.equal(fake.dispatchCalls, 0);
+        const run = layer.status().runs[0]?.run;
+        assert.equal(run?.runtimeDispatched, false);
+        assert.equal(run?.promptNotSent, true);
+        assert.equal(run?.dispatchOwner, undefined);
+        assert.equal(spentAttempts('task_1').length, 0);
+        assert.ok(listReservations().every((reservation) => reservation.state === 'released'));
+      });
+      assert.equal((await layer.dispatch(input({ approvalId }))).runtimeDispatched, true);
+    } finally { s.cleanup(); }
+  });
+
+  it('fences a live claim from a competing recovery before the adapter settles', async () => {
+    const s = sandbox();
+    try {
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const ready = new Promise<void>((resolve) => { entered = resolve; });
+      class LiveAdapter extends FakeAdapter {
+        newSessionId() { return 'not-yet-observed-session'; }
+        override async dispatch(request: DispatchInput): Promise<DispatchResult> { entered(); await gate; return super.dispatch(request); }
+      }
+      const fake = new LiveAdapter();
+      fake.reconcileKind = 'checks-failed';
+      const layer = createCoordinatorCommands(() => fake);
+      const approvalId = approveTestDispatch(layer);
+      const running = layer.dispatch(input({ approvalId }));
+      await ready;
+      const report = await layer.recover();
+      assert.equal(report[0]?.blocksNewAttempt, true);
+      assert.equal(fake.reconcileCalls, 0, 'a pre-start/not-found observation cannot free live capacity');
+      const retry = await layer.dispatch(input({ approvalId }));
+      assert.equal(retry.runtimeDispatched, false);
+      release();
+      assert.equal((await running).outcome.kind, 'completed');
+    } finally { s.cleanup(); }
+  });
+
+  it('uses the shared claim for concurrent redispatches of the same retained request', async () => {
+    const s = sandbox();
+    try {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      class RetryAdapter extends FakeAdapter {
+        override async readUsage(): Promise<UsageResult> {
+          if (++this.usageCalls > 1) { if (this.usageCalls === 3) release(); await gate; }
+          return reading();
+        }
+        override async dispatch(request: DispatchInput): Promise<DispatchResult> {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return super.dispatch(request);
+        }
+      }
+      const fake = new RetryAdapter();
+      const layer = createCoordinatorCommands(() => fake);
+      const first = await layer.dispatch(input({ approvalId: approveTestDispatch(layer) }));
+      const retries = await Promise.all([0, 1].map(() => layer.runRedispatch(OPERATOR, first.run!.id)));
+      assert.equal(retries.filter((retry) => retry.runtimeDispatched).length, 1);
+      assert.equal(fake.dispatchCalls, 2);
+      assert.deepEqual(spentAttempts('task_1').map((run) => run.attempt).sort(), [1, 2]);
+    } finally { s.cleanup(); }
+  });
+
+  it('does not switch a redispatch to another grant during admission', async () => {
+    const s = sandbox();
+    try {
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const ready = new Promise<void>((resolve) => { entered = resolve; });
+      class RetryAdapter extends FakeAdapter {
+        override async readUsage(): Promise<UsageResult> {
+          if (++this.usageCalls > 1) { entered(); await gate; }
+          return reading();
+        }
+      }
+      const fake = new RetryAdapter();
+      const layer = createCoordinatorCommands(() => fake);
+      const grant = layer.grantCreate(OPERATOR, grantInput());
+      const first = await layer.dispatch(input({ triggerSource: 'test' }));
+      const retry = layer.runRedispatch(OPERATOR, first.run!.id);
+      await ready;
+      layer.grantRevoke(OPERATOR, grant.id, 'withdraw retry authority');
+      layer.grantCreate(OPERATOR, grantInput());
+      release();
+      await assert.rejects(retry, /no longer covers this retry/);
+      assert.equal(fake.dispatchCalls, 1);
+      assert.equal(layer.status().runs.length, 1);
+      assert.equal(listReservations().length, 1);
+    } finally { s.cleanup(); }
+  });
+
+  for (const cap of ['task', 'grant', 'account'] as const) {
+    it(`enforces ${cap} capacity across caller processes`, { timeout: 10_000 }, async () => {
+      const s = sandbox();
+      const children: ReturnType<typeof spawn>[] = [];
+      try {
+        const layer = createCoordinatorCommands(() => new FakeAdapter());
+        layer.grantCreate(OPERATOR, grantInput({
+          aggregate: { maxDispatchesPerWindow: 10, windowHours: 24, maxConcurrentRuns: cap === 'grant' ? 1 : 10 },
+        }));
+        const module = new URL('./commands.js', import.meta.url).href;
+        let readingCount = 0;
+        let progress = 0;
+        let starts = 0;
+        const results = [0, 1].map((i) => new Promise<boolean>((resolve, reject) => {
+          const request = input({ taskId: cap === 'task' ? 'shared-process-task' : `process-task-${i}`,
+            runtime: i === 0 ? 'pi-local' : 'claude-local', triggerSource: 'test',
+            ...(cap === 'account' ? { estimate: { ...input().estimate, weeklyPercent: 20, uncertaintyPercent: 0 } } : {}),
+          });
+          const child = spawn(process.execPath, ['--input-type=module', '-e', `
+            import { createCoordinatorCommands } from ${JSON.stringify(module)};
+            const request = JSON.parse(process.env.REQUEST);
+            const signal = () => new Promise(resolve => process.once('message', resolve));
+            const adapter = {
+              capabilities: ${JSON.stringify(CAPS)},
+              async readUsage() { const ready = signal(); process.send({ kind: 'reading' }); await ready;
+                return ${JSON.stringify(reading())}; },
+              async dispatch(input) { const finished = signal(); process.send({ kind: 'started' }); await finished;
+                return { outcome: { kind: 'completed', summary: 'fixture stopped' },
+                  settings: { requested: {model:'vendor-default',effort:'vendor-default'},
+                    resolved: {model:'vendor-default',effort:'vendor-default'}, observed: {model:'unknown',effort:'unknown'} } }; },
+              async reconcile() { return {kind:'remote-uncertain',summary:'fixture still running'}; },
+              async checkReadiness() { return undefined; },
+            };
+            const result = await createCoordinatorCommands(() => adapter).dispatch(request);
+            process.send({ kind: 'result', dispatched: result.runtimeDispatched }); process.disconnect();
+          `], { env: { ...process.env, AGENTSYS_STATE: s.root, REQUEST: JSON.stringify(request) }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+          children.push(child);
+          let stderr = '';
+          child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
+          child.on('error', reject);
+          child.on('exit', (code) => { if (code !== 0) reject(new Error(`fixture exit ${code}: ${stderr}`)); });
+          child.on('message', (raw) => {
+            const message = raw as { kind: string; dispatched?: boolean };
+            if (message.kind === 'reading' && ++readingCount === 2) for (const worker of children) worker.send('admit');
+            if (message.kind === 'started') { starts++; progress++; }
+            if (message.kind === 'result') { if (!message.dispatched) progress++; resolve(message.dispatched!); }
+            if (progress === 2) { progress++; for (const worker of children) if (worker.connected) worker.send('finish'); }
+          });
+        }));
+        assert.deepEqual((await Promise.all(results)).sort(), [false, true]);
+        assert.equal(starts, 1, 'only one process receives runtime execution authority');
+        assert.equal(listReservations().length, 1);
+      } finally { for (const child of children) child.kill('SIGKILL'); s.cleanup(); }
+    });
+  }
+
+  for (const phase of ['run claim', 'reservation', 'request evidence', 'dispatch boundary'] as const) {
+    it(`recovers abrupt dispatcher death after ${phase} without freeing uncertain work`, { timeout: 10_000 }, async () => {
+      const s = sandbox();
+      let child: ReturnType<typeof spawn> | undefined;
+      try {
+        const fake = new FakeAdapter();
+        const layer = createCoordinatorCommands(() => fake);
+        const approvalId = approveTestDispatch(layer);
+        const job = phase === 'request evidence' ? submitJob({ taskId: 'task_1', idempotencyKey: 'crash-job',
+          repo: REPO, workClass: 'ci-repair', runtime: 'pi-local', obligations: ['unit'] }).job : undefined;
+        const commandsModule = new URL('./commands.js', import.meta.url).href;
+        child = spawn(process.execPath, ['--input-type=module', '-e', `
+          import fs from 'node:fs';
+          import { syncBuiltinESMExports } from 'node:module';
+          const write = fs.writeFileSync;
+          fs.writeFileSync = (path, ...args) => {
+            write(path, ...args);
+            if (process.env.CRASH_PHASE === 'request evidence' && String(path).endsWith('/dispatch-request.json')) process.kill(process.pid, 'SIGKILL');
+          };
+          const rename = fs.renameSync;
+          fs.renameSync = (from, to) => {
+            rename(from, to);
+            const phase = process.env.CRASH_PHASE;
+            if ((phase === 'reservation' && to.includes('/reservations/')) ||
+                (phase === 'run claim' && to.includes('/runs/')) ||
+                (phase === 'dispatch boundary' && to.includes('/runs/') && JSON.parse(fs.readFileSync(to)).runtimeDispatched === true)) {
+              process.kill(process.pid, 'SIGKILL');
+            }
+          };
+          syncBuiltinESMExports();
+          const { createCoordinatorCommands } = await import(${JSON.stringify(commandsModule)});
+          const adapter = {
+            capabilities: ${JSON.stringify(CAPS)},
+            async readUsage() { return ${JSON.stringify(reading())}; },
+            async dispatch() { throw new Error('fixture must crash before invoking runtime'); },
+            async reconcile() { throw new Error('no remote fixture'); },
+            async checkReadiness() { return undefined; },
+          };
+          await createCoordinatorCommands(() => adapter).dispatch(JSON.parse(process.env.REQUEST));
+        `], { env: { ...process.env, AGENTSYS_STATE: s.root, CRASH_PHASE: phase,
+          REQUEST: JSON.stringify(input({ approvalId, ...(job ? { jobId: job.id } : {}) })) }, stdio: ['ignore', 'pipe', 'pipe'] });
+        const [code, signal] = await once(child, 'exit');
+        assert.equal(code, null);
+        assert.equal(signal, 'SIGKILL');
+        const claims = layer.status().runs;
+        assert.equal(claims.length, 1);
+        assert.equal(claims[0]?.run.runtimeDispatched, phase === 'dispatch boundary');
+        const reports = await layer.recover();
+        if (phase === 'dispatch boundary') {
+          assert.equal(reports[0]?.blocksNewAttempt, true);
+          assert.equal(listReservations()[0]?.state, 'held', 'unknown effects retain account exposure');
+          assert.equal((await layer.dispatch(input({ approvalId }))).runtimeDispatched, false);
+        } else {
+          assert.equal(reports[0]?.blocksNewAttempt, false);
+          assert.equal(getRun(claims[0]!.run.id)?.promptNotSent, true);
+          assert.equal(spentAttempts('task_1').length, 0);
+          assert.ok(listReservations().every((r) => r.state === 'released'));
+          const retry = await layer.dispatch(input({ approvalId, ...(job ? { jobId: job.id } : {}) }));
+          assert.equal(retry.runtimeDispatched, true);
+          assert.equal(retry.run?.attempt, 1);
+          if (job) {
+            assert.deepEqual(layer.jobs().jobs[0]?.runIds, [claims[0]!.run.id, retry.run!.id]);
+            assert.deepEqual(layer.jobs().jobs[0]?.outstandingObligations, ['unit']);
+          }
+        }
+      } finally { child?.kill('SIGKILL'); s.cleanup(); }
+    });
+  }
+
+  it('does not overbook one task across runtimes and subscriptions during admission', async () => {
+    const s = sandbox();
+    try {
+      let releaseUsage!: () => void;
+      const usageGate = new Promise<void>((resolve) => { releaseUsage = resolve; });
+      let usageCalls = 0;
+      let active = 0;
+      let peak = 0;
+      class RacingAdapter extends FakeAdapter {
+        constructor(runtime: RuntimeId) {
+          super();
+          this.capabilities = { ...CAPS, runtime, subscriptionId: runtime };
+        }
+        override readonly capabilities: RuntimeCapabilities;
+        override async readUsage(): Promise<UsageResult> {
+          if (++usageCalls === 2) releaseUsage();
+          await usageGate;
+          const result = reading();
+          if (result.ok) result.reading.subscriptionId = this.capabilities.subscriptionId;
+          return result;
+        }
+        override async dispatch(request: DispatchInput): Promise<DispatchResult> {
+          peak = Math.max(peak, ++active);
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          active--;
+          return super.dispatch(request);
+        }
+      }
+      const layer = createCoordinatorCommands((runtime) => new RacingAdapter(runtime));
+      layer.grantCreate(OPERATOR, {
+        repos: [REPO], workClasses: ['ci-repair'], triggerSources: ['test'],
+        actions: ['author-changes'], runtimes: ['pi-local', 'claude-local'], profiles: ['default'],
+        perTask: { maxAttempts: 3, maxConcurrentRuns: 1, maxPaidCallUsd: 1 },
+        aggregate: { maxDispatchesPerWindow: 10, windowHours: 24, maxConcurrentRuns: 10 }, reason: 'race test',
+      });
+      const results = await Promise.all(['pi-local', 'claude-local'].map((runtime) =>
+        layer.dispatch(input({ runtime: runtime as RuntimeId, triggerSource: 'test' }))));
+      assert.equal(peak, 1, 'a task limit of one must never authorize simultaneous executions');
+      assert.equal(results.filter((result) => result.runtimeDispatched).length, 1);
+    } finally { s.cleanup(); }
+  });
+});
 
 describe('the shared command layer', () => {
   it('reports every recorded terminal state without requiring completion-time loop metadata', async () => {
@@ -679,7 +1030,7 @@ describe('the shared command layer', () => {
         const released = reservationStates[kind] === 'released';
         assert.equal(next.admission?.admitted, released);
         assert.equal(next.runtimeDispatched, released);
-        assert.equal(next.admission?.windows.find((w) => w.kind === 'weekly')?.reservedPercent, released ? 0 : 20);
+        assert.equal(next.admission?.windows.find((w) => w.kind === 'weekly')?.reservedPercent, released ? 0 : 21);
         assert.equal(fake.dispatchCalls, released ? 2 : 1);
         assert.deepEqual(layer.status().reservations.find((r) => r.id === reservation.id), reservation);
       } finally {
@@ -787,7 +1138,7 @@ describe('the shared command layer', () => {
           return super.dispatch(request);
         }
       }
-      const pi = new ObservedPi(bin, s.root, { readUsage: () => Promise.resolve(reading()) }, undefined, 150);
+      const pi = new ObservedPi(bin, s.root, { readUsage: () => Promise.resolve(reading(PI_CAPABILITIES.subscriptionId)) }, undefined, 150);
       const layer = createCoordinatorCommands(() => pi);
       const result = await layer.dispatch(input({ approvalId: approveTestDispatch(layer) }));
       pid = Number(readFileSync(join(s.root, 'pid'), 'utf8'));
@@ -845,7 +1196,40 @@ describe('the shared command layer', () => {
     }
   });
 
-  it('releases only the never-dispatched retry, not the earlier uncertain job run', async () => {
+  it('releases never-dispatched job retries with spare capacity in a long-lived caller', async () => {
+    const s = sandbox();
+    try {
+      const fake = new FakeAdapter('remote-uncertain');
+      const layer = createCoordinatorCommands(() => fake);
+      const grant = layer.grantCreate(OPERATOR, {
+        repos: [REPO], workClasses: ['ci-repair'], triggerSources: ['test'],
+        actions: ['author-changes'], runtimes: ['pi-local'], profiles: ['default'],
+        perTask: { maxAttempts: 2, maxConcurrentRuns: 2, maxPaidCallUsd: 1 },
+        aggregate: { maxDispatchesPerWindow: 2, windowHours: 24, maxConcurrentRuns: 2 },
+        reason: 'Never-dispatched retry regression fixture',
+      });
+      const { job } = submitJob({ taskId: 'task_1', idempotencyKey: 'job_retry', repo: REPO, workClass: 'ci-repair', runtime: 'pi-local', obligations: [] });
+      const request = input({ jobId: job.id, triggerSource: 'test' });
+      const first = await layer.dispatch(request);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const retry = await layer.dispatch(request);
+        assert.equal(retry.outcome.kind, 'remote-uncertain');
+        assert.equal(retry.runtimeDispatched, false);
+        assert.equal(retry.run?.status, 'quota-waiting');
+        assert.equal(retry.run?.promptNotSent, true);
+        assert.equal(retry.run?.dispatchOwner, undefined);
+        assert.equal(fake.dispatchCalls, 1);
+        assert.deepEqual(activeRuns().map(run => run.id), [first.run!.id]);
+        assert.equal(spentAttempts('task_1').length, 1);
+        assert.equal(dispatchesUnderAuthority(grant.id, 24).length, 1);
+        assert.equal(listReservations().filter(reservation => reservation.state === 'outstanding').length, 1);
+      }
+      saveRun({ ...getRun(first.run!.id)!, status: 'completed', endedAt: new Date().toISOString() });
+      assert.equal(activeRuns().length, 0, 'returned retries cannot keep this daemon’s live PID holding capacity');
+    } finally { s.cleanup(); }
+  });
+
+  it('does not claim a retry while the earlier uncertain job run owns capacity', async () => {
     const s = sandbox();
     try {
       const fake = new FakeAdapter('remote-uncertain');
@@ -863,12 +1247,9 @@ describe('the shared command layer', () => {
       assert.equal(retry.outcome.kind, 'remote-uncertain');
       assert.equal(retry.runtimeDispatched, false);
       assert.equal(fake.dispatchCalls, 1);
-      assert.notEqual(retry.admission?.reservationId, first.admission?.reservationId);
+      assert.equal(retry.admission, undefined, 'authority capacity refusal precedes reservation');
       const reservations = layer.status().reservations;
-      assert.deepEqual(reservations.find((r) => r.id === original?.id), original);
-      const unused = reservations.find((r) => r.id === retry.admission?.reservationId);
-      assert.equal(unused?.state, 'released');
-      assert.match(unused?.note ?? '', /not dispatched/);
+      assert.deepEqual(reservations, [original]);
     } finally {
       s.cleanup();
     }

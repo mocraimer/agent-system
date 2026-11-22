@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import type { Outcome } from './outcome.js';
-import { listRecords, newId, readJson, readRecord, stateRoot, withLock, writeJson } from './store.js';
+import { listRecords, newId, readJson, readRecord, stateRoot, withDispatchFence, withLock, writeJson } from './store.js';
+import { archivedTarget, assertNotArchived } from './interactive-archive.js';
 
 /**
  * The paid provider-call ledger.
@@ -103,7 +104,8 @@ export type CallDecision =
 
 /** Reserve budget for one paid call, or refuse with a reason the operator can act on. */
 export function reserveCall(req: CallRequest): CallDecision {
-  return withLock('paid-call-ledger', () => {
+  return withDispatchFence(() => withLock('paid-call-ledger', () => {
+    if (archivedTarget({ taskId: req.taskId, runId: req.runId })) return { allowed: false as const, outcome: { kind: 'refused' as const, taskId: req.taskId, runId: req.runId, summary: 'Archived/prepared task family cannot reserve a new paid call.', nextAction: 'Keep archived history read-only; reconcile unknown archive state with the owner.' } };
     if (!(req.boundUsd > 0) || !Number.isFinite(req.boundUsd) || req.boundBasis.trim() === '') {
       return {
         allowed: false as const,
@@ -153,7 +155,7 @@ export function reserveCall(req: CallRequest): CallDecision {
       reservation,
       remainingUsd: remaining - req.boundUsd,
     };
-  });
+  }));
 }
 
 /**
@@ -164,10 +166,11 @@ export function reserveCall(req: CallRequest): CallDecision {
  * retried call consumes the allowance twice — which is the point.
  */
 export function settleCall(id: string, actualUsd?: number): CallReservation | undefined {
-  return withLock('paid-call-ledger', () => {
+  return withDispatchFence(() => withLock('paid-call-ledger', () => {
     const path = join(ledgerDir(), `${id}.json`);
     const c = readRecord<CallReservation>('paid-call', path);
     if (!c) return undefined;
+    assertNotArchived({ taskId: c.taskId, runId: c.runId });
     // The two fields are exclusive. Spreading one over a record that already holds
     // the other left `actualUsd` in place beside `actualUnknown`, and `committedUsd`
     // prefers `actualUsd` — so correcting a figure to "unknown" went on charging the
@@ -181,17 +184,19 @@ export function settleCall(id: string, actualUsd?: number): CallReservation | un
     };
     writeJson(path, next);
     return next;
-  });
+  }));
 }
 
 /** Release a reservation for a call that never happened. */
 export function releaseCall(id: string): CallReservation | undefined {
-  return withLock('paid-call-ledger', () => {
+  return withDispatchFence(() => withLock('paid-call-ledger', () => {
     const path = join(ledgerDir(), `${id}.json`);
     const c = readRecord<CallReservation>('paid-call', path);
-    if (!c || c.state === 'settled') return c;
+    if (!c) return undefined;
+    assertNotArchived({ taskId: c.taskId, runId: c.runId });
+    if (c.state === 'settled') return c;
     const next: CallReservation = { ...c, state: 'released', settledAt: new Date().toISOString() };
     writeJson(path, next);
     return next;
-  });
+  }));
 }
