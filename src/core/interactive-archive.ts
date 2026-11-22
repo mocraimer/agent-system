@@ -8,7 +8,7 @@ import type { CallReservation } from './ledger.js';
 import type { InteractiveSubmission } from './interactive.js';
 import type { Scorecard } from '../eval/scorecard.js';
 import { getRun, holdsRunCapacity, type RunRecord } from './run.js';
-import { readJson, readRecord, stateRoot, withLock, writeJson } from './store.js';
+import { readJson, readRecord, stateRoot, withLock, withLocks, writeJson } from './store.js';
 
 export interface InteractiveArchiveInput {
   archiveId: string;
@@ -55,7 +55,7 @@ function id(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/.test(value)) throw new Error('Archive requires bounded exact receiver/task/run identities, not paths.');
 }
 function ids(values: unknown): string[] {
-  if (!Array.isArray(values) || values.length > 256) throw new Error('Archive identity set exceeds its bound.');
+  if (!Array.isArray(values)) throw new Error('Archive requires an exact identity set.');
   values.forEach(id); return [...new Set(values as string[])].sort();
 }
 function keys(value: unknown, expected: readonly string[]): void {
@@ -64,7 +64,7 @@ function keys(value: unknown, expected: readonly string[]): void {
 function normalize(input: InteractiveArchiveInput): InteractiveArchiveInput {
   keys(input, ['archiveId', 'product', 'receivers', 'taskIds', 'runIds']); keys(input.product, ['kind', 'id']);
   id(input.archiveId); id(input.product?.id);
-  if (!['project', 'space', 'task'].includes(input.product.kind) || !Array.isArray(input.receivers) || !input.receivers.length || input.receivers.length > 256) throw new Error('Archive requires its exact product destination/receivers.');
+  if (!['project', 'space', 'task'].includes(input.product.kind) || !Array.isArray(input.receivers) || !input.receivers.length) throw new Error('Archive requires its exact product destination/receivers.');
   const receivers = input.receivers.map(receiver => {
     keys(receiver, ['spaceId', 'conversationId', 'taskId']);
     id(receiver.spaceId); id(receiver.conversationId); if (receiver.taskId !== null) id(receiver.taskId);
@@ -161,7 +161,6 @@ function snapshot(input: InteractiveArchiveInput) {
   }
   const runs = allRuns.filter(run => tasks.has(run.taskId));
   if ([...conversations].some(conversationId => !input.receivers.some(receiver => receiver.conversationId === conversationId))) throw new Error('Expanded family needs exact product receiver identities for every linked conversation.');
-  if (runs.length > 256 || tasks.size > 256 || conversations.size > 256) throw new Error('Expanded archive family exceeds its bounded inventory.');
   for (const run of runs) {
     if (run.interactive?.parentRunId && !allRuns.some(parent => parent.id === run.interactive!.parentRunId)) throw new Error('Linked parent history is missing; archive cannot prove the family.');
     const noPrompt = run.promptNotSent === true && run.runtimeDispatched === false;
@@ -190,8 +189,8 @@ function snapshot(input: InteractiveArchiveInput) {
   return { fence: { taskIds: [...tasks].sort(), conversationIds: [...conversations].sort(), runIds }, runPins,
     inventoryDigest: hash({ runPins, reservations, calls, jobs, cards, approvals, submissions: linkedSubmissions }) };
 }
-function runLocks<T>(runIds: readonly string[], operation: () => T, index = 0): T {
-  return index === runIds.length ? operation() : withLock(`run-${runIds[index]}`, () => runLocks(runIds, operation, index + 1));
+function runLocks<T>(runIds: readonly string[], operation: () => T): T {
+  return withLocks(runIds.map(runId => `run-${runId}`), operation);
 }
 function persist(receipt: InteractiveArchiveReceipt): void {
   const path = file(receipt.archiveId); writeJson(path, receipt);
@@ -227,7 +226,7 @@ function complete(receipt: InteractiveArchiveReceipt, commit: InteractiveArchive
     receipt.failure ??= 'commit-not-acknowledged'; persist(receipt); throw error;
   }
 }
-/** Owner-only irreversible archive; no inference, stop, authority grant or evidence rewrite. */
+/** Owner-only whole-history archive; no lifetime count cap, inference, stop or evidence rewrite. */
 export function interactiveArchive(actor: Actor, raw: InteractiveArchiveInput, commit: InteractiveArchiveCommit): InteractiveArchiveReceipt {
   assertOperator(actor); const input = normalize(raw);
   if (commit.constructor.name === 'AsyncFunction') throw new Error('Archive callback must be synchronous.');

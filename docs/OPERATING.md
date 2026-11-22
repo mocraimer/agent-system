@@ -67,6 +67,25 @@ process-death behavior has been verified on a Windows drive mounted in WSL. Nati
 compatibility evidence before such a cutover. Building or testing this feature
 does not authorize live activation, grant changes or service restarts.
 
+### Owner-only interactive archive
+
+The trusted product library archives a whole retained project, space or task family
+through `interactiveArchive`; this is not a remote request or a cancellation API.
+Supply every exact product receiver, including already archived children. The
+coordinator expands all retained linked runs, tasks and conversations. There is no
+lifetime count cap; each identifier still has a bounded size and excludes paths.
+Remote dispatch and evidence request bounds remain unchanged.
+
+Archive refuses active, uncertain, queued or otherwise unresolved work and held
+limits. It keeps history and evidence intact. One shared dispatch fence and the
+complete ordered set of run locks stay owned until the synchronous SQL callback
+finishes. Lock acquisition or OS resource failures refuse the entire operation,
+never truncate the inventory or commit part of a family. The prepared cutoff is
+durable before SQL and denies late writers even if the process dies. After a lost
+acknowledgement, use `interactiveArchiveReconcile` with a trusted SQL read and the
+same archive key; an uncommitted archive needs an explicit synchronous retry.
+Reconciliation and replay verify the full frozen inventory before succeeding.
+
 ## What it does not do
 
 It never merges into `main`, enables auto-merge, force-pushes, pushes to a base

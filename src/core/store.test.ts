@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { closeSync, mkdirSync, openSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import fs, { closeSync, mkdirSync, openSync, readlinkSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { tryLock, unlock } from 'fs-native-extensions';
@@ -7,7 +8,7 @@ import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { createGrant, listGrants } from './authority.js';
 import { authorizeDispatch } from './authorize.js';
-import { listRecords, LOCK_STALE_MS, stateRoot, withDispatchFence, withLock, withLockAsync } from './store.js';
+import { listRecords, LOCK_STALE_MS, stateRoot, withDispatchFence, withLock, withLockAsync, withLocks } from './store.js';
 import { OPERATOR, sandbox } from './testkit.js';
 import type { Sandbox } from './testkit.js';
 
@@ -124,6 +125,124 @@ describe('descriptor-owned store locks', () => {
       child.kill('SIGKILL');
       await exited;
       withLock('crash', () => assert.equal(statSync(path).ino, inode));
+    } finally { child.kill('SIGKILL'); }
+  });
+});
+
+function lockDescriptors(): string[] {
+  return readdirSync('/proc/self/fd').flatMap(fd => {
+    try { const path = readlinkSync(`/proc/self/fd/${fd}`); return path.startsWith(join(box!.root, 'locks') + '/') ? [path] : []; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+  }).sort();
+}
+
+describe('ordered whole-set store locks', () => {
+  it('deduplicates and acquires in codepoint order, retaining every descriptor through the body', (t) => {
+    box = sandbox(); const opened: string[] = [], original = fs.openSync;
+    t.mock.method(fs, 'openSync', (...args: Parameters<typeof fs.openSync>) => { opened.push(String(args[0])); return original(...args); });
+    syncBuiltinESMExports();
+    try {
+      assert.equal(withLocks(['z', 'a', 'z', 'A'], () => {
+        assert.deepEqual(opened.map(path => path.split('/').at(-1)), ['A.lock', 'a.lock', 'z.lock']);
+        assert.equal(lockDescriptors().length, 3);
+        for (const name of ['A', 'a', 'z']) {
+          const fd = openSync(join(box!.root, 'locks', `${name}.lock`), 'a+');
+          try { assert.equal(tryLock(fd), false); } finally { closeSync(fd); }
+          assert.throws(() => withLock(name, () => assert.fail('not exclusive')), /busy/);
+        }
+        return 'whole set';
+      }), 'whole set');
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+    assert.deepEqual(lockDescriptors(), []);
+    withLocks(['z', 'a', 'A'], () => assert.equal(lockDescriptors().length, 3));
+    assert.equal(withLocks([], () => 42), 42);
+  });
+  it('does not turn lifetime lock count into recursive call depth', () => {
+    box = sandbox(); const names = Array.from({ length: 4097 }, (_, index) => `history-${index}`);
+    withLocks(names, () => assert.equal(lockDescriptors().length, names.length));
+    assert.deepEqual(lockDescriptors(), []);
+  });
+  it('unwinds partial acquisition on same-process contention and filesystem failure, without entering the body', () => {
+    box = sandbox();
+    withLock('b', () => {
+      assert.throws(() => withLocks(['c', 'b', 'a'], () => assert.fail('partial body')), /busy/);
+      assert.deepEqual(lockDescriptors(), [join(box!.root, 'locks', 'b.lock')]);
+      withLock('a', () => {});
+    });
+    mkdirSync(join(box.root, 'locks', 'b-directory.lock'));
+    assert.throws(() => withLocks(['a', 'b-directory'], () => assert.fail('partial body')), /EISDIR/);
+    assert.deepEqual(lockDescriptors(), []);
+    withLock('a', () => {});
+  });
+  it('reports OS resource exhaustion without running a partial body or leaking acquired descriptors', (t) => {
+    box = sandbox(); const original = fs.openSync;
+    const exhausted = Object.assign(new Error('fixture descriptor exhaustion'), { code: 'EMFILE' });
+    t.mock.method(fs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
+      if (String(args[0]).endsWith('/b.lock')) throw exhausted;
+      return original(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      assert.throws(() => withLocks(['a', 'b', 'c'], () => assert.fail('partial resource body')), error => error === exhausted);
+      assert.deepEqual(lockDescriptors(), []);
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+    withLocks(['a', 'b', 'c'], () => {}); assert.deepEqual(lockDescriptors(), []);
+  });
+  it('bounds real kernel contention and closes partial handles without releasing the other holder', (t) => {
+    box = sandbox(); mkdirSync(join(box.root, 'locks'));
+    const path = join(box.root, 'locks', 'b.lock'), fd = openSync(path, 'a+');
+    assert.equal(tryLock(fd), true); const inode = statSync(path).ino;
+    let time = 0; t.mock.method(Date, 'now', () => time += LOCK_STALE_MS * 2 + 1);
+    try {
+      assert.throws(() => withLocks(['a', 'b', 'c'], () => assert.fail('contended body')), /within 120s/);
+      assert.deepEqual(lockDescriptors(), [path]);
+      const contender = openSync(path, 'a+');
+      try { assert.equal(tryLock(contender), false); } finally { closeSync(contender); }
+      assert.equal(statSync(path).ino, inode);
+    } finally { closeSync(fd); t.mock.restoreAll(); }
+    withLocks(['a', 'b', 'c'], () => {}); assert.deepEqual(lockDescriptors(), []);
+  });
+  it('releases the full set after a body failure, and after each release failure', (t) => {
+    box = sandbox(); const body = new Error('body failure');
+    assert.throws(() => withLocks(['a', 'b', 'c'], () => { throw body; }), error => error === body);
+    assert.deepEqual(lockDescriptors(), []);
+    const original = fs.closeSync, closed: string[] = [];
+    t.mock.method(fs, 'closeSync', (fd: number) => {
+      const path = readlinkSync(`/proc/self/fd/${fd}`); original(fd); closed.push(path);
+      throw new Error(`release failure ${path.split('/').at(-1)}`);
+    });
+    syncBuiltinESMExports();
+    try {
+      assert.throws(() => withLocks(['a', 'b', 'c'], () => { throw body; }), error => {
+        assert.ok(error instanceof AggregateError);
+        assert.deepEqual(error.errors.map((item: Error) => item.message), ['body failure', 'release failure c.lock', 'release failure b.lock', 'release failure a.lock']);
+        return true;
+      });
+      assert.equal(closed.length, 3); assert.deepEqual(lockDescriptors(), []);
+      assert.throws(() => withLocks(['a'], () => 'successful body'), /release failure a.lock/);
+      assert.deepEqual(lockDescriptors(), []);
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+    withLocks(['a', 'b', 'c'], () => {}); assert.deepEqual(lockDescriptors(), []);
+    assert.throws(() => withLocks(['a'], async () => assert.fail('async body')), /synchronous/);
+    assert.throws(() => withLocks(['a'], () => Promise.resolve()), /promise/);
+    assert.deepEqual(lockDescriptors(), []);
+  });
+  it('process death releases every retained lock on the same stable inodes', { timeout: 10000 }, async () => {
+    box = sandbox(); const names = ['a', 'b', 'c'];
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { withLocks } from ${JSON.stringify(new URL('./store.js', import.meta.url).href)};
+      withLocks(${JSON.stringify(names)}, () => { process.send('whole-set-owned'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); });
+    `], { env: { ...process.env, AGENTSYS_STATE: box.root }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    try {
+      const [message] = await once(child, 'message'); assert.equal(message, 'whole-set-owned');
+      const inodes = names.map(name => statSync(join(box!.root, 'locks', `${name}.lock`)).ino);
+      for (const name of names) {
+        const fd = openSync(join(box.root, 'locks', `${name}.lock`), 'a+');
+        try { assert.equal(tryLock(fd), false); } finally { closeSync(fd); }
+      }
+      const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited;
+      withLocks(names, () => assert.deepEqual(names.map(name => statSync(join(box!.root, 'locks', `${name}.lock`)).ino), inodes));
+      assert.deepEqual(lockDescriptors(), []);
     } finally { child.kill('SIGKILL'); }
   });
 });

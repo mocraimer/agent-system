@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { readFileSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, openSync, readFileSync, readlinkSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { tryLock } from 'fs-native-extensions';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -15,7 +16,7 @@ import { getRun, saveRun } from './run.js';
 import { authorizeDispatch } from './authorize.js';
 import { getScorecard } from '../eval/scorecard.js';
 import type { ActionId } from './authority.js';
-import { stateRoot, writeJson } from './store.js';
+import { stateRoot, withLock, writeJson } from './store.js';
 import { OPERATOR, sandbox, type Sandbox } from './testkit.js';
 
 class Adapter implements RuntimeAdapter {
@@ -49,9 +50,9 @@ function commit(receipt: Readonly<InteractiveArchiveReceipt>): InteractiveArchiv
   database.prepare('INSERT OR IGNORE INTO archives VALUES (?,?,?,?)').run(receipt.archiveId, receipt.fingerprint, receipt.input.product.kind, receipt.input.product.id);
   return inspect(receipt);
 }
-function fixture(adapter = new Adapter()) {
+function fixture(adapter = new Adapter(), maxDispatches = 20, maxAttempts = 12) {
   const core = createCoordinatorCommands(() => adapter);
-  core.grantCreate(OPERATOR, { repos: ['project'], workClasses: ['fixture'], triggerSources: ['owner'], actions: ['conversation', 'task-tools', 'delegate-task', 'author-changes'], runtimes: ['pi-local'], profiles: ['archive-fixture'], perTask: { maxAttempts: 12, maxConcurrentRuns: 2, maxPaidCallUsd: 2 }, aggregate: { maxDispatchesPerWindow: 20, maxConcurrentRuns: 2, windowHours: 24 }, reason: 'isolated fixture only; no live grants' });
+  core.grantCreate(OPERATOR, { repos: ['project'], workClasses: ['fixture'], triggerSources: ['owner'], actions: ['conversation', 'task-tools', 'delegate-task', 'author-changes'], runtimes: ['pi-local'], profiles: ['archive-fixture'], perTask: { maxAttempts, maxConcurrentRuns: 2, maxPaidCallUsd: 2 }, aggregate: { maxDispatchesPerWindow: maxDispatches, maxConcurrentRuns: 2, windowHours: 24 }, reason: 'isolated fixture only; no live grants' });
   const input: DispatchTaskInput = { taskId: 'root', repo: 'project', workClass: 'fixture', runtime: 'pi-local', profile: 'archive-fixture', actions: ['conversation', 'task-tools', 'delegate-task'], triggerSource: 'owner', settings: { model: 'provider/exact', effort: 'high' }, prompt: 'fixture turn', estimate, entry: 'interactive', interactive: { requestId: 'turn-1', conversationId: 'conversation-root' } };
   return { core, adapter, input };
 }
@@ -68,7 +69,136 @@ function result(process: ChildProcess): Promise<unknown> {
   });
 }
 
+function archiveDescriptors(): string[] {
+  return readdirSync('/proc/self/fd').flatMap(fd => {
+    try { const path = readlinkSync(`/proc/self/fd/${fd}`); return path.startsWith(join(box.root, 'locks') + '/') ? [path] : []; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+  });
+}
+async function retainedFamily(count = 258) {
+  const { core, input, adapter } = fixture(new Adapter(), count, count);
+  const root = (await core.interactiveSubmit(input))!.run!;
+  const runs = [root], request = archive(root.id);
+  for (let index = 1; index < count; index++) {
+    const taskId = `child-${String(index).padStart(4, '0')}`, conversationId = `conversation-${taskId}`;
+    const submission = (await core.interactiveSubmit({ ...input, taskId, interactive: { requestId: `turn-${taskId}`, conversationId, parentRunId: root.id } }))!;
+    assert.ok(submission.run, JSON.stringify(submission.result));
+    const run = submission.run;
+    assert.equal(run.status, 'completed'); runs.push(run);
+    request.taskIds.push(taskId); request.runIds.push(run.id);
+    request.receivers.push({ spaceId: 'space-1', conversationId, taskId: `product-${taskId}` });
+  }
+  assert.equal(adapter.calls, count);
+  assert.equal(listReservations().filter(item => item.state !== 'released').length, 0);
+  return { core, input, runs, request };
+}
+
 describe('owner archive port: durable coordinator cutoff around synchronous product SQL commit', () => {
+  it('archives whole lifetime history beyond 256, including archived children, and freezes every identity without leaking descriptors', { timeout: 120000 }, async () => {
+    const { core, input, runs, request } = await retainedFamily(); const last = runs.at(-1)!;
+    const archivedChild = runs[1]!;
+    core.interactiveArchive(OPERATOR, archive(archivedChild.id, archivedChild.taskId, archivedChild.interactive!.conversationId), commit);
+    assert.equal(core.currentAuthoritySettings(last.id, 'conversation', false).allowed, true, 'far-end child is not fenced by its archived sibling');
+    const paths = runs.flatMap(run => [join(stateRoot(), 'runs', `${run.id}.json`), join(run.evidenceDir!, 'dispatch-request.json')]);
+    const bytes = paths.map(path => readFileSync(path));
+    const assertComplete = (receipt: Readonly<InteractiveArchiveReceipt>) => {
+      assert.deepEqual(receipt.fence.runIds, runs.map(run => run.id).sort());
+      assert.deepEqual(receipt.fence.taskIds, [...request.taskIds, ...request.receivers.map(receiver => receiver.taskId!)].sort());
+      assert.deepEqual(receipt.fence.conversationIds, request.receivers.map(receiver => receiver.conversationId).sort());
+      assert.deepEqual(Object.keys(receipt.runPins).sort(), receipt.fence.runIds);
+      assert.ok(Object.values(receipt.runPins).every(pin => /^[a-f0-9]{64}$/.test(pin.record) && /^[a-f0-9]{64}$/.test(pin.evidence)));
+    };
+    const assertLastFrozen = () => {
+      assert.throws(() => core.interactiveRuntimeResultRecord(last.id, last.interactive!.requestId, { outcome: { kind: 'completed', runId: last.id, summary: 'late writer', nextAction: 'review' }, settings: last.settings }), /archive cutoff/);
+      assert.throws(() => core.feedbackRecord(OPERATOR, `card_${last.taskId}`, { verdict: 'accepted', reason: 'late audit' }), /archive cutoff/);
+      assert.equal(reserveCall({ taskId: 'unrelated-new-task', runId: last.id, operation: 'fixture', boundUsd: 0.1, boundBasis: 'fixture' }).allowed, false);
+      assert.equal(core.currentAuthoritySettings(last.id, 'conversation', false).allowed, false);
+    };
+    const receipt = core.interactiveArchive(OPERATOR, request, prepared => {
+      assertComplete(prepared); assertLastFrozen();
+      assert.equal(core.interactiveArchiveLookup(OPERATOR, request.archiveId)?.state, 'prepared');
+      assert.equal(archiveDescriptors().length, runs.length + 1, 'dispatch and every run descriptor remain owned through SQL');
+      for (const run of [runs[0]!, last]) {
+        const fd = openSync(join(box.root, 'locks', `run-${run.id}.lock`), 'a+');
+        try { assert.equal(tryLock(fd), false); } finally { closeSync(fd); }
+      }
+      const observation = commit(prepared);
+      // The SQL callback sees a detached inventory; it cannot alter the persisted cutoff.
+      prepared.fence.runIds.pop(); prepared.fence.taskIds.pop(); prepared.fence.conversationIds.pop();
+      delete prepared.runPins[last.id]; prepared.input.runIds.pop();
+      return observation;
+    });
+    assertComplete(receipt); assertLastFrozen(); assert.deepEqual(archiveDescriptors(), []);
+    assert.deepEqual(core.interactiveArchive(OPERATOR, request, () => assert.fail('duplicate commit')), receipt);
+    assert.deepEqual(core.interactiveArchiveReconcile(OPERATOR, request.archiveId, inspect), receipt);
+    assert.deepEqual(archiveDescriptors(), []);
+    paths.forEach((path, index) => assert.deepEqual(readFileSync(path), bytes[index]));
+    await assert.rejects(() => core.interactiveSubmit({ ...input, taskId: 'future-descendant', interactive: { requestId: 'future-descendant', conversationId: 'future-descendant', parentRunId: last.id } }), /archive cutoff/);
+    assert.equal(core.status().runs.length, runs.length);
+    assert.equal(database.prepare('SELECT count(*) AS n FROM archives').get()!.n, 2);
+    const evidencePath = join(last.evidenceDir!, 'dispatch-request.json'), originalEvidence = readFileSync(evidencePath);
+    writeFileSync(evidencePath, 'trusted fixture changed far-end evidence');
+    assert.throws(() => core.interactiveArchive(OPERATOR, request, commit), /inventory changed/);
+    assert.throws(() => core.interactiveArchiveReconcile(OPERATOR, request.archiveId, inspect), /inventory changed/);
+    assert.equal(core.interactiveArchiveLookup(OPERATOR, request.archiveId)?.state, 'archived');
+    assert.deepEqual(archiveDescriptors(), []); writeFileSync(evidencePath, originalEvidence);
+  });
+  it('expands the whole family from one root and refuses active, uncertain or queued work past 256 before SQL; same-key crash reconciliation retains all locks and history', { timeout: 120000 }, async () => {
+    const { core, runs, request } = await retainedFamily(257); const last = runs.at(-1)!;
+    const expanded = { ...request, taskIds: ['root'], runIds: [runs[0]!.id] };
+    for (const status of ['running', 'remote-uncertain'] as const) {
+      saveRun({ ...last, status });
+      assert.throws(() => core.interactiveArchive(OPERATOR, expanded, () => assert.fail('unsafe SQL')), /active.*uncertain/);
+      assert.deepEqual(archiveDescriptors(), []);
+    }
+    saveRun(last);
+    const queued = join(stateRoot(), 'interactive-submissions', 'far-end-queue.json');
+    for (const state of ['submitting', 'uncertain'] as const) {
+      writeJson(queued, { requestId: 'far-end-queue', taskId: 'far-end-queued-task', parentRunId: last.id, rootTaskId: 'root', conversationId: last.interactive!.conversationId, state });
+      assert.throws(() => core.interactiveArchive(OPERATOR, expanded, () => assert.fail('queued SQL')), /submitting\/unknown/);
+    }
+    writeJson(queued, { requestId: 'far-end-queue', taskId: 'far-end-queued-task', parentRunId: last.id, rootTaskId: 'root', conversationId: last.interactive!.conversationId, state: 'settled', result: { outcome: { kind: 'refused' } } });
+    assert.throws(() => core.interactiveArchive(OPERATOR, { ...expanded, receivers: expanded.receivers.slice(0, -1) }, commit), /every linked conversation/);
+    assert.equal(core.interactiveArchiveLookup(OPERATOR, request.archiveId), undefined);
+    assert.equal(database.prepare('SELECT count(*) AS n FROM archives').get()!.n, 0);
+    const blockedRun = runs.map(run => run.id).sort().at(-1)!;
+    withLock(`run-${blockedRun}`, () => {
+      assert.throws(() => core.interactiveArchive(OPERATOR, expanded, () => assert.fail('partial lock SQL')), /busy/);
+      assert.deepEqual(archiveDescriptors(), [join(box.root, 'locks', `run-${blockedRun}.lock`)]);
+      assert.equal(core.interactiveArchiveLookup(OPERATOR, request.archiveId), undefined);
+    });
+    assert.deepEqual(archiveDescriptors(), []);
+    const archival = child(`import {createCoordinatorCommands} from ${JSON.stringify(new URL('../commands.js', import.meta.url).href)};import {DatabaseSync} from 'node:sqlite';
+      const db=new DatabaseSync(${JSON.stringify(join(box.root, 'product.sqlite'))});
+      createCoordinatorCommands(()=>{throw Error('no runtime');}).interactiveArchive(${JSON.stringify(OPERATOR)},${JSON.stringify(expanded)},r=>{
+        db.prepare('INSERT INTO archives VALUES (?,?,?,?)').run(r.archiveId,r.fingerprint,r.input.product.kind,r.input.product.id);
+        process.send({runCount:r.fence.runIds.length,conversationCount:r.fence.conversationIds.length});Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);
+      });`);
+    try {
+      assert.deepEqual(await result(archival), { runCount: runs.length, conversationCount: runs.length });
+      const paths = ['dispatch', ...runs.map(run => `run-${run.id}`)].map(name => join(box.root, 'locks', `${name}.lock`));
+      const inodes = paths.map(path => statSync(path).ino);
+      for (const path of [paths[0]!, paths.at(-1)!]) {
+        const fd = openSync(path, 'a+'); try { assert.equal(tryLock(fd), false); } finally { closeSync(fd); }
+      }
+      const exited = once(archival, 'exit'); archival.kill('SIGKILL'); await exited;
+      const prepared = core.interactiveArchiveLookup(OPERATOR, request.archiveId)!;
+      assert.equal(prepared.state, 'prepared');
+      assert.equal(prepared.fence.runIds.length, runs.length);
+      assert.equal(reserveCall({ taskId: last.taskId, runId: last.id, operation: 'fixture', boundUsd: 0.1, boundBasis: 'fixture' }).allowed, false);
+      const receipt = core.interactiveArchiveReconcile(OPERATOR, request.archiveId, pinned => {
+        assert.equal(archiveDescriptors().length, runs.length + 1);
+        assert.deepEqual(pinned.fence, prepared.fence); assert.deepEqual(pinned.runPins, prepared.runPins);
+        return inspect(pinned);
+      }, () => assert.fail('lost ack must not commit twice'));
+      assert.equal(receipt.state, 'archived'); assert.deepEqual(receipt.fence, prepared.fence);
+      assert.deepEqual(receipt.runPins, prepared.runPins); assert.equal(receipt.inventoryDigest, prepared.inventoryDigest);
+      assert.ok(receipt.fence.taskIds.includes('far-end-queued-task'));
+      assert.deepEqual(archiveDescriptors(), []);
+      assert.deepEqual(paths.map(path => statSync(path).ino), inodes);
+      assert.equal(database.prepare('SELECT count(*) AS n FROM archives').get()!.n, 1);
+    } finally { archival.kill('SIGKILL'); }
+  });
   it('retains terminal runs/evidence, freezes exact history and blocks legacy/new tools/admission without changing grants', async () => {
     const { core, adapter, input } = fixture(); const initial = await core.interactiveSubmit(input); const run = initial!.run!;
     const pin = core.interactiveEvidencePin(run.id); const oldRun = JSON.stringify(getRun(run.id)); const grants = JSON.stringify(core.grantList());

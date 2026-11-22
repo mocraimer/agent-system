@@ -237,6 +237,30 @@ export function withLock<T>(name: string, fn: () => T): T {
   }
 }
 
+/**
+ * Hold a complete ordered set through one synchronous operation, without recursive
+ * call depth. Acquisition/resource failures never run a partial operation. Unwind
+ * every owned descriptor even if acquisition, the body, or another release fails.
+ */
+export function withLocks<T>(names: readonly string[], fn: () => T): T {
+  if (fn.constructor.name === 'AsyncFunction') throw new Error('Multi-lock callback must be synchronous.');
+  const handles: LockHandle[] = [], errors: unknown[] = [];
+  let result!: T;
+  try {
+    for (const name of [...new Set(names)].sort()) handles.push(acquireLock(name));
+    result = fn();
+    if (result && (typeof result === 'object' || typeof result === 'function') && 'then' in result && typeof result.then === 'function') throw new Error('Multi-lock callback returned an unsupported promise.');
+  } catch (error) { errors.push(error); }
+  finally {
+    for (const handle of handles.reverse()) {
+      try { releaseLock(handle); } catch (error) { errors.push(error); }
+    }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'Multi-lock operation or cleanup failed.');
+  return result;
+}
+
 /** Reuse only this process's still-owned synchronous dispatch descriptor, never an async holder. */
 export function withDispatchFence<T>(fn: () => T): T {
   const execute = (): T => {
